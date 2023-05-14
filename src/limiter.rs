@@ -12,6 +12,8 @@ use tokio::{
     time::{timeout, Instant},
 };
 
+use crate::limit::LimitAlgorithm;
+
 pub struct Limiter<T> {
     limit_algo: T,
     semaphore: Arc<Semaphore>,
@@ -22,7 +24,9 @@ impl<T> Limiter<T>
 where
     T: LimitAlgorithm,
 {
-    pub fn new(limit_algo: T, initial_permits: usize) -> Self {
+    pub fn new(limit_algo: T) -> Self {
+        let initial_permits = limit_algo.initial_limit();
+        assert!(initial_permits > 0);
         Self {
             limit_algo,
             semaphore: Arc::new(Semaphore::new(initial_permits)),
@@ -51,10 +55,17 @@ where
         }
     }
 
-    pub async fn record_reading(&self, reading: Reading<'_>) {
+    pub async fn record_reading(&self, timer: Timer<'_>, result: ReadingResult) {
+        let reading = Reading {
+            latency: timer.start.elapsed(),
+            result,
+        };
+
         let new_limit = self.limit_algo.update(reading);
 
         let old_limit = self.limit.swap(new_limit, Ordering::SeqCst);
+
+        drop(timer.permit);
 
         match new_limit.cmp(&old_limit) {
             cmp::Ordering::Greater => {
@@ -64,7 +75,6 @@ where
                 let semaphore = self.semaphore.clone();
                 tokio::spawn(async move {
                     let permits = semaphore
-                        // FIXME: do this async, don't block
                         .acquire_many((old_limit - new_limit) as u32)
                         .await
                         .expect("we own the semaphore, we shouldn't have closed it");
@@ -76,12 +86,16 @@ where
         }
     }
 
-    #[cfg(test)]
-    fn limit(&self) -> usize {
+    pub fn available(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+
+    pub fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
 }
 
+#[derive(Debug)]
 pub struct Timer<'t> {
     permit: SemaphorePermit<'t>,
     start: Instant,
@@ -94,57 +108,31 @@ impl<'t> Timer<'t> {
             start: Instant::now(),
         }
     }
-
-    pub fn reading(self, result: ReadingResult) -> Reading<'t> {
-        Reading {
-            latency: self.start.elapsed(),
-            result,
-            permit: self.permit,
-        }
-    }
 }
 
-pub struct Reading<'t> {
-    latency: Duration,
-    result: ReadingResult,
-    permit: SemaphorePermit<'t>,
+pub struct Reading {
+    pub(crate) latency: Duration,
+    pub(crate) result: ReadingResult,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReadingResult {
     Success,
     Ignore,
     Overload,
 }
 
-pub trait LimitAlgorithm {
-    fn update(&self, reading: Reading) -> usize;
-}
-
-struct FixedLimit(usize);
-impl FixedLimit {
-    pub fn limit(limit: usize) -> Self {
-        Self(limit)
-    }
-}
-impl LimitAlgorithm for FixedLimit {
-    fn update(&self, _reading: Reading) -> usize {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{limit::FixedLimit, Limiter, ReadingResult};
 
     #[tokio::test]
     async fn it_works() {
-        let limiter = Limiter::new(FixedLimit::limit(10), 10);
+        let limiter = Limiter::new(FixedLimit::limit(10));
 
-        let permit = limiter.try_acquire().unwrap();
+        let timer = limiter.try_acquire().unwrap();
 
-        limiter
-            .record_reading(permit.reading(ReadingResult::Success))
-            .await;
+        limiter.record_reading(timer, ReadingResult::Success).await;
 
         assert_eq!(limiter.limit(), 10);
     }
