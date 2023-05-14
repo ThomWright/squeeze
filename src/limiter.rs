@@ -20,7 +20,7 @@ pub struct Limiter<T> {
 
 impl<T> Limiter<T>
 where
-    T: LimitAlgo,
+    T: LimitAlgorithm,
 {
     pub fn new(limit_algo: T, initial_permits: usize) -> Self {
         Self {
@@ -116,14 +116,19 @@ pub enum ReadingResult {
     Overload,
 }
 
-pub trait LimitAlgo {
+pub trait LimitAlgorithm {
     fn update(&self, reading: Reading) -> usize;
 }
 
-struct DummyLimitAlgo;
-impl LimitAlgo for DummyLimitAlgo {
+struct FixedLimit(usize);
+impl FixedLimit {
+    pub fn limit(limit: usize) -> Self {
+        Self(limit)
+    }
+}
+impl LimitAlgorithm for FixedLimit {
     fn update(&self, _reading: Reading) -> usize {
-        10
+        self.0
     }
 }
 
@@ -133,7 +138,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let limiter = Limiter::new(DummyLimitAlgo, 10);
+        let limiter = Limiter::new(FixedLimit::limit(10), 10);
 
         let permit = limiter.try_acquire().unwrap();
 
