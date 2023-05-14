@@ -9,6 +9,7 @@ TODO: Why would someone want to use this? What problem does it solve, and how?
 - How do we get maximum goodput (successful throughput) in an overloaded system?
   - Overload, goodput vs throughput
   - Need to throttle or shed load in order to protect systems from overload
+  - Ideally, 1. we send the amount of traffic that the system can handle, but no more, and 2. the system can shed any excess load with a minimum of work.
 - How do we prevent upstream systems from overloading downstream systems?
   - Backpressure
   - E.g. `External API -> Internal service -> Database`
@@ -52,6 +53,23 @@ TODO:
 - Dynamic
   - Can automatically detect and respond to overload
 
+### Circuit breakers vs throttling
+
+- Circuit breakers
+  - All or nothing - if a circuit breaker sees a downstream system is overloaded it stops all traffic to that system. This is OK for a complete outage, but many cases of overload are likely to be "brownouts" where _some_ traffic could be processed.
+- Throttling
+  - More responsive to partial outages. Traffic can be reduced to a level the downstream system can handle. Overall availability during a partial outage can be much higher.
+
+Example of a circuit breaker causing a complete outage for a particular API route:
+
+```text
+        availability = 0%         overloaded
+          v      v                  v
+Client -> API -> internal system -> database
+                               ^
+                      circuit breaker trips
+```
+
 ### On congestion detection
 
 - TCP congestion control
@@ -66,10 +84,10 @@ TODO:
 
 ### Symptoms vs causes
 
-- TODO: better title?
-- Resources such as CPU, memory, threads, connections, bandwidth are the underlying bottlenecks
+- We need a way to detect overload.
+- Causes: Resources such as CPU, memory, threads, connections, bandwidth are the underlying bottlenecks
   - It can be hard to predict what the bottleneck will be and what effect it will have, especially in large, complex systems.
-- Instead, we can measure _symptoms_ - increased latency (our own, or from other systems) or failures from overloaded systems
+- Symptoms: Instead, we can measure _symptoms_ - increased latency (our own, or from other systems) or failures from overloaded systems
 - In the spirit of [alerting on symptoms, not causes](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/edit)
 
 ### Explicit vs implicit backpressure signalling
@@ -89,6 +107,11 @@ TODO:
 > Does this require coordination between multiple processes?
 
 No! The congestion detection is based on TCP congestion control algorithms which are designed to work independently. In TCP, each transmitting socket independently detects congestion and reacts accordingly.
+
+## Glossary
+
+- Downstream - system receiving requests or messages
+- Upstream - system sending requests or messages
 
 ## Prior art
 
