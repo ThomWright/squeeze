@@ -27,10 +27,15 @@ struct Request<'t> {
     latency: Duration,
     timer: Timer<'t>,
 
-    /// Limit available when before request was made.
-    limit: usize,
-    /// Available concurrency remaining before the request was made.
-    available: usize,
+    /// Limit state before the request was made.
+    limit_state: LimitState,
+}
+
+struct RequestResult {
+    result: ReadingResult,
+
+    /// Limit state after the request ended.
+    limit_state: LimitState,
 }
 
 #[derive(Debug)]
@@ -42,21 +47,38 @@ struct Event<'t> {
 enum EventType<'t> {
     StartRequest,
     EndRequest {
-        limit: usize,
-        available: usize,
         start_time: Instant,
+        original_limit_state: LimitState,
         timer: Timer<'t>,
     },
 }
 
+struct Summary {
+    event_log: Vec<EventLogEntry>,
+    requests: Vec<RequestSummary>,
+}
+
 #[derive(Debug)]
-struct Result {
+struct RequestSummary {
     start_time: Instant,
+    start_state: LimitState,
+    end_state: LimitState,
     end_time: Instant,
-    limit: usize,
-    available: usize,
     latency: Duration,
     result: ReadingResult,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LimitState {
+    limit: usize,
+    available: usize,
+}
+
+#[derive(Debug)]
+enum EventLogEntry {
+    Accepted(LimitState),
+    Rejected(LimitState),
+    Finished(ReadingResult, LimitState),
 }
 
 impl Client {
@@ -91,18 +113,22 @@ where
     }
 
     ///
-    fn start(&self, rng: &mut SmallRng) -> Option<Request> {
-        let limit = self.limiter.limit();
-        let available = self.limiter.available();
-        self.limiter.try_acquire().map(|timer| Request {
-            latency: Duration::from_secs_f64(self.latency.sample(rng)),
-            timer,
-            limit,
-            available,
-        })
+    fn start(&self, rng: &mut SmallRng) -> Result<Request, LimitState> {
+        let limit_state = LimitState {
+            limit: self.limiter.limit(),
+            available: self.limiter.available(),
+        };
+        self.limiter
+            .try_acquire()
+            .map(|timer| Request {
+                latency: Duration::from_secs_f64(self.latency.sample(rng)),
+                timer,
+                limit_state,
+            })
+            .ok_or(limit_state)
     }
 
-    async fn end(&self, timer: Timer<'_>, rng: &mut SmallRng) -> ReadingResult {
+    async fn end(&self, timer: Timer<'_>, rng: &mut SmallRng) -> RequestResult {
         let result = if rng.gen_range(0.0..=1.0) > self.failure_rate {
             ReadingResult::Success
         } else {
@@ -111,7 +137,13 @@ where
 
         self.limiter.record_reading(timer, result).await;
 
-        result
+        RequestResult {
+            result,
+            limit_state: LimitState {
+                limit: self.limiter.limit(),
+                available: self.limiter.available(),
+            },
+        }
     }
 }
 
@@ -132,8 +164,8 @@ impl Ord for Event<'_> {
     }
 }
 
-/// Precondition: time has been paused (can't seem to assert this).
-async fn simulate(max_time: Duration) -> Vec<Result> {
+async fn simulate(max_time: Duration) -> Summary {
+    tokio::time::pause();
     let start = Instant::now();
 
     let seed = rand::random();
@@ -159,42 +191,46 @@ async fn simulate(max_time: Duration) -> Vec<Result> {
         typ: EventType::StartRequest,
     }));
 
-    let mut results = vec![];
+    let mut requests = vec![];
+    let mut event_log = vec![];
 
     while let Some(Reverse(event)) = queue.pop() {
         tokio::time::advance(event.time.duration_since(Instant::now())).await;
         let current_time = Instant::now();
 
         match event.typ {
-            EventType::StartRequest => {
-                if let Some(req) = server.start(&mut rng) {
+            EventType::StartRequest => match server.start(&mut rng) {
+                Ok(req) => {
                     queue.push(Reverse(Event {
                         time: current_time + req.latency,
                         typ: EventType::EndRequest {
                             start_time: current_time,
                             timer: req.timer,
-                            limit: req.limit,
-                            available: req.available,
+                            original_limit_state: req.limit_state,
                         },
                     }));
+                    event_log.push(EventLogEntry::Accepted(req.limit_state));
                 }
-            }
+                Err(limit_state) => {
+                    event_log.push(EventLogEntry::Rejected(limit_state));
+                }
+            },
 
             EventType::EndRequest {
                 start_time,
                 timer,
-                limit,
-                available,
+                original_limit_state,
             } => {
                 let result = server.end(timer, &mut rng).await;
-                results.push(Result {
+                requests.push(RequestSummary {
                     start_time,
                     end_time: current_time,
                     latency: current_time.duration_since(start_time),
-                    limit,
-                    available,
-                    result,
+                    start_state: original_limit_state,
+                    end_state: result.limit_state,
+                    result: result.result,
                 });
+                event_log.push(EventLogEntry::Finished(result.result, result.limit_state));
             }
         }
 
@@ -208,12 +244,33 @@ async fn simulate(max_time: Duration) -> Vec<Result> {
         }
     }
 
-    results
+    Summary {
+        event_log,
+        requests,
+    }
 }
 
-#[tokio::test(start_paused = true)]
-async fn test() {
-    let results = simulate(Duration::from_secs(5)).await;
+impl Summary {
+    fn requests(&self) -> usize {
+        self.event_log
+            .iter()
+            .filter(|el| matches!(el, EventLogEntry::Accepted(_) | EventLogEntry::Rejected(_)))
+            .count()
+    }
+    fn rejected(&self) -> usize {
+        self.event_log
+            .iter()
+            .filter(|el| matches!(el, EventLogEntry::Rejected(_)))
+            .count()
+    }
+}
 
-    println!("{results:#?}");
+#[tokio::test]
+async fn test() {
+    let summary = simulate(Duration::from_secs(2)).await;
+
+    println!("{:#?}", summary.event_log);
+
+    println!("Requests: {}", summary.requests());
+    println!("Rejected: {}", summary.rejected());
 }
