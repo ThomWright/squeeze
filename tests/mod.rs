@@ -9,13 +9,35 @@ use squeeze::{
 };
 use tokio::time::Instant;
 
+struct Simulation {
+    duration: Duration,
+    client: Client,
+    server: Server,
+}
+
+enum LimitWrapper {
+    Aimd(AIMDLimit),
+}
+impl LimitAlgorithm for LimitWrapper {
+    fn initial_limit(&self) -> usize {
+        match self {
+            LimitWrapper::Aimd(l) => l.initial_limit(),
+        }
+    }
+    fn update(&self, reading: squeeze::Reading) -> usize {
+        match self {
+            LimitWrapper::Aimd(l) => l.update(reading),
+        }
+    }
+}
+
 struct Client {
     /// Poisson process, exponential interarrival times.
     interarrival: Exp,
 }
 
-struct Server<T> {
-    limiter: Limiter<T>,
+struct Server {
+    limiter: Limiter<LimitWrapper>,
 
     latency: Erlang,
 
@@ -83,7 +105,7 @@ enum EventLogEntry {
 
 impl Client {
     /// Create a client which sends `rps` requests per second on average.
-    fn new(rps: f64) -> Self {
+    fn new_with_rps(rps: f64) -> Self {
         Self {
             interarrival: Exp::new(rps).unwrap(),
         }
@@ -95,15 +117,12 @@ impl Client {
     }
 }
 
-impl<T> Server<T>
-where
-    T: LimitAlgorithm,
-{
+impl Server {
     /// Create a server with a concurrency limiter, a latency distribution and a failure rate.
     ///
     /// The latency is calculated according to the number of tasks needed to be performed and the
     /// average rate of completion of these tasks (per second).
-    fn new(limiter: Limiter<T>, tasks: u64, task_rate: f64, failure_rate: f64) -> Self {
+    fn new(limiter: Limiter<LimitWrapper>, tasks: u64, task_rate: f64, failure_rate: f64) -> Self {
         assert!((0.0..=1.0).contains(&failure_rate));
         Self {
             limiter,
@@ -112,7 +131,7 @@ where
         }
     }
 
-    ///
+    /// Start processing a request.
     fn start(&self, rng: &mut SmallRng) -> Result<Request, LimitState> {
         let limit_state = LimitState {
             limit: self.limiter.limit(),
@@ -128,6 +147,7 @@ where
             .ok_or(limit_state)
     }
 
+    /// Finish processing a request.
     async fn end(&self, timer: Timer<'_>, rng: &mut SmallRng) -> RequestResult {
         let result = if rng.gen_range(0.0..=1.0) > self.failure_rate {
             ReadingResult::Success
@@ -164,89 +184,82 @@ impl Ord for Event<'_> {
     }
 }
 
-async fn simulate(max_time: Duration) -> Summary {
-    tokio::time::pause();
-    let start = Instant::now();
+impl Simulation {
+    async fn run(&mut self) -> Summary {
+        tokio::time::pause();
+        let start = Instant::now();
 
-    let seed = rand::random();
-    let mut rng = SmallRng::seed_from_u64(seed);
-    println!("Seed: {seed}");
+        let seed = rand::random();
+        let mut rng = SmallRng::seed_from_u64(seed);
+        println!("Seed: {seed}");
 
-    let mut client = Client::new(10.0);
-    let server = Server::new(
-        Limiter::new(
-            AIMDLimit::new_with_limit(10)
-                .decrease_factor(0.9)
-                .increase_by(1),
-        ),
-        2,
-        10.0,
-        0.01,
-    );
+        // Priority queue of events (min heap).
+        let mut queue = BinaryHeap::new();
+        queue.push(Reverse(Event {
+            time: start,
+            typ: EventType::StartRequest,
+        }));
 
-    // Priority queue of events (min heap).
-    let mut queue = BinaryHeap::new();
-    queue.push(Reverse(Event {
-        time: start,
-        typ: EventType::StartRequest,
-    }));
+        let mut requests = vec![];
+        let mut event_log = vec![];
 
-    let mut requests = vec![];
-    let mut event_log = vec![];
+        while let Some(Reverse(event)) = queue.pop() {
+            let dt = event.time.duration_since(Instant::now());
+            tokio::time::advance(dt).await;
+            let current_time = Instant::now();
 
-    while let Some(Reverse(event)) = queue.pop() {
-        tokio::time::advance(event.time.duration_since(Instant::now())).await;
-        let current_time = Instant::now();
+            match event.typ {
+                EventType::StartRequest => {
+                    match self.server.start(&mut rng) {
+                        Ok(req) => {
+                            queue.push(Reverse(Event {
+                                time: current_time + req.latency,
+                                typ: EventType::EndRequest {
+                                    start_time: current_time,
+                                    timer: req.timer,
+                                    original_limit_state: req.limit_state,
+                                },
+                            }));
+                            event_log.push(EventLogEntry::Accepted(req.limit_state));
+                        }
+                        Err(limit_state) => {
+                            event_log.push(EventLogEntry::Rejected(limit_state));
+                        }
+                    };
 
-        match event.typ {
-            EventType::StartRequest => match server.start(&mut rng) {
-                Ok(req) => {
-                    queue.push(Reverse(Event {
-                        time: current_time + req.latency,
-                        typ: EventType::EndRequest {
-                            start_time: current_time,
-                            timer: req.timer,
-                            original_limit_state: req.limit_state,
-                        },
-                    }));
-                    event_log.push(EventLogEntry::Accepted(req.limit_state));
+                    if current_time.duration_since(start) < self.duration {
+                        let dt = self.client.next_arrival_in(&mut rng);
+                        let event = Event {
+                            time: current_time + dt,
+                            typ: EventType::StartRequest,
+                        };
+                        queue.push(Reverse(event));
+                    }
                 }
-                Err(limit_state) => {
-                    event_log.push(EventLogEntry::Rejected(limit_state));
-                }
-            },
 
-            EventType::EndRequest {
-                start_time,
-                timer,
-                original_limit_state,
-            } => {
-                let result = server.end(timer, &mut rng).await;
-                requests.push(RequestSummary {
+                EventType::EndRequest {
                     start_time,
-                    end_time: current_time,
-                    latency: current_time.duration_since(start_time),
-                    start_state: original_limit_state,
-                    end_state: result.limit_state,
-                    result: result.result,
-                });
-                event_log.push(EventLogEntry::Finished(result.result, result.limit_state));
+                    timer,
+                    original_limit_state,
+                } => {
+                    let result = self.server.end(timer, &mut rng).await;
+                    requests.push(RequestSummary {
+                        start_time,
+                        end_time: current_time,
+                        latency: current_time.duration_since(start_time),
+                        start_state: original_limit_state,
+                        end_state: result.limit_state,
+                        result: result.result,
+                    });
+                    event_log.push(EventLogEntry::Finished(result.result, result.limit_state));
+                }
             }
         }
 
-        if current_time.duration_since(start) < max_time {
-            let dt = client.next_arrival_in(&mut rng);
-            let event = Event {
-                time: current_time + dt,
-                typ: EventType::StartRequest,
-            };
-            queue.push(Reverse(event));
+        Summary {
+            event_log,
+            requests,
         }
-    }
-
-    Summary {
-        event_log,
-        requests,
     }
 }
 
@@ -267,7 +280,22 @@ impl Summary {
 
 #[tokio::test]
 async fn test() {
-    let summary = simulate(Duration::from_secs(2)).await;
+    let mut simulation = Simulation {
+        duration: Duration::from_secs(1),
+
+        client: Client::new_with_rps(20.0),
+        server: Server::new(
+            Limiter::new(LimitWrapper::Aimd(
+                AIMDLimit::new_with_limit(20)
+                    .decrease_factor(0.9)
+                    .increase_by(1),
+            )),
+            2,
+            10.0,
+            0.01,
+        ),
+    };
+    let summary = simulation.run().await;
 
     println!("{:#?}", summary.event_log);
 

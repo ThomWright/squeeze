@@ -33,6 +33,13 @@ TODO: table comparison of the different algorithms
 - Input: delay, loss or both
 - Increase/decrease characteristics - additive, multiplicative or otherwise
 
+## How should I set concurrency limits?
+
+TODO:
+
+- Example: database-bound service with 10 connections
+- Example: I/O-bound service running on a single core
+
 ## Background
 
 ### Rate limits vs concurrency limits
