@@ -4,7 +4,7 @@ use rand::{prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 use statrs::distribution::{Erlang, Exp};
 
 use squeeze::{
-    limit::{AIMDLimit, LimitAlgorithm},
+    limit::{AimdLimit, LimitAlgorithm},
     Limiter, ReadingResult, Timer,
 };
 use tokio::time::Instant;
@@ -16,7 +16,7 @@ struct Simulation {
 }
 
 enum LimitWrapper {
-    Aimd(AIMDLimit),
+    Aimd(AimdLimit),
 }
 impl LimitAlgorithm for LimitWrapper {
     fn initial_limit(&self) -> usize {
@@ -45,18 +45,25 @@ struct Server {
     failure_rate: f64,
 }
 
+/// Latency is calculated according to the number of tasks needing to be performed and the
+/// average rate of completion of these tasks (per second).
+struct LatencyProfile {
+    tasks: u64,
+    task_rate: f64,
+}
+
 struct Request<'t> {
     latency: Duration,
     timer: Timer<'t>,
 
-    /// Limit state before the request was made.
+    /// Limiter state just after the request started.
     limit_state: LimitState,
 }
 
 struct RequestResult {
     result: ReadingResult,
 
-    /// Limit state after the request ended.
+    /// Limiter state just after the request finished.
     limit_state: LimitState,
 }
 
@@ -70,6 +77,7 @@ enum EventType<'t> {
     StartRequest,
     EndRequest {
         start_time: Instant,
+        /// Limiter state just after the request started.
         original_limit_state: LimitState,
         timer: Timer<'t>,
     },
@@ -83,7 +91,9 @@ struct Summary {
 #[derive(Debug)]
 struct RequestSummary {
     start_time: Instant,
+    /// Limiter state just after this request was accepted/rejected.
     start_state: LimitState,
+    /// Limiter state just after this request finished.
     end_state: LimitState,
     end_time: Instant,
     latency: Duration,
@@ -119,32 +129,35 @@ impl Client {
 
 impl Server {
     /// Create a server with a concurrency limiter, a latency distribution and a failure rate.
-    ///
-    /// The latency is calculated according to the number of tasks needed to be performed and the
-    /// average rate of completion of these tasks (per second).
-    fn new(limiter: Limiter<LimitWrapper>, tasks: u64, task_rate: f64, failure_rate: f64) -> Self {
+    fn new(
+        limiter: Limiter<LimitWrapper>,
+        latency_profile: LatencyProfile,
+        failure_rate: f64,
+    ) -> Self {
         assert!((0.0..=1.0).contains(&failure_rate));
         Self {
             limiter,
-            latency: Erlang::new(tasks, task_rate).unwrap(),
+            latency: Erlang::from(latency_profile),
             failure_rate,
         }
     }
 
     /// Start processing a request.
     fn start(&self, rng: &mut SmallRng) -> Result<Request, LimitState> {
-        let limit_state = LimitState {
-            limit: self.limiter.limit(),
-            available: self.limiter.available(),
-        };
         self.limiter
             .try_acquire()
             .map(|timer| Request {
                 latency: Duration::from_secs_f64(self.latency.sample(rng)),
                 timer,
-                limit_state,
+                limit_state: LimitState {
+                    limit: self.limiter.limit(),
+                    available: self.limiter.available(),
+                },
             })
-            .ok_or(limit_state)
+            .ok_or(LimitState {
+                limit: self.limiter.limit(),
+                available: self.limiter.available(),
+            })
     }
 
     /// Finish processing a request.
@@ -164,6 +177,12 @@ impl Server {
                 available: self.limiter.available(),
             },
         }
+    }
+}
+
+impl From<LatencyProfile> for Erlang {
+    fn from(lp: LatencyProfile) -> Self {
+        Erlang::new(lp.tasks, lp.task_rate).unwrap()
     }
 }
 
@@ -263,42 +282,76 @@ impl Simulation {
     }
 }
 
+impl LimitState {
+    fn concurrency(&self) -> usize {
+        self.limit - self.available
+    }
+}
+
+impl EventLogEntry {
+    fn limit_state(&self) -> LimitState {
+        match self {
+            EventLogEntry::Accepted(ls) => *ls,
+            EventLogEntry::Rejected(ls) => *ls,
+            EventLogEntry::Finished(_, ls) => *ls,
+        }
+    }
+}
+
 impl Summary {
-    fn requests(&self) -> usize {
+    fn total_requests(&self) -> usize {
         self.event_log
             .iter()
             .filter(|el| matches!(el, EventLogEntry::Accepted(_) | EventLogEntry::Rejected(_)))
             .count()
     }
-    fn rejected(&self) -> usize {
+    fn total_rejected(&self) -> usize {
         self.event_log
             .iter()
             .filter(|el| matches!(el, EventLogEntry::Rejected(_)))
             .count()
+    }
+    fn mean_latency(&self) -> Duration {
+        self.requests.iter().map(|r| r.latency).sum::<Duration>() / self.total_requests() as u32
+    }
+    fn max_concurrency(&self) -> usize {
+        self.event_log
+            .iter()
+            .map(|log| log.limit_state().concurrency())
+            .max()
+            .unwrap_or(0)
     }
 }
 
 #[tokio::test]
 async fn test() {
     let mut simulation = Simulation {
-        duration: Duration::from_secs(1),
+        duration: Duration::from_secs(30),
 
-        client: Client::new_with_rps(20.0),
+        client: Client::new_with_rps(25.0),
         server: Server::new(
             Limiter::new(LimitWrapper::Aimd(
-                AIMDLimit::new_with_limit(20)
+                AimdLimit::new_with_initial_limit(10)
+                    .with_max_limit(20)
                     .decrease_factor(0.9)
                     .increase_by(1),
             )),
-            2,
-            10.0,
+            LatencyProfile {
+                tasks: 2,
+                task_rate: 10.0,
+            },
             0.01,
         ),
     };
+
     let summary = simulation.run().await;
 
     println!("{:#?}", summary.event_log);
+    println!("{:#?}", summary.requests);
 
-    println!("Requests: {}", summary.requests());
-    println!("Rejected: {}", summary.rejected());
+    println!("Requests: {}", summary.total_requests());
+    println!("Rejected: {}", summary.total_rejected());
+
+    println!("Mean latency: {:#?}", summary.mean_latency());
+    println!("Max. concurrency: {:#?}", summary.max_concurrency());
 }

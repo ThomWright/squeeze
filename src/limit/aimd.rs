@@ -10,7 +10,7 @@ use crate::{Reading, ReadingResult};
 
 use super::LimitAlgorithm;
 
-pub struct AIMDLimit {
+pub struct AimdLimit {
     limit: AtomicUsize,
     decrease_factor: f32,
     increase_by: usize,
@@ -19,13 +19,13 @@ pub struct AIMDLimit {
     max_limit: usize,
 }
 
-impl AIMDLimit {
+impl AimdLimit {
     const DEFAULT_DECREASE_FACTOR: f32 = 0.9;
     const DEFAULT_INCREASE: usize = 1;
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 100;
 
-    pub fn new_with_limit(initial_limit: usize) -> Self {
+    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         Self {
             limit: AtomicUsize::new(initial_limit),
             decrease_factor: Self::DEFAULT_DECREASE_FACTOR,
@@ -50,9 +50,17 @@ impl AIMDLimit {
             ..self
         }
     }
+
+    pub fn with_max_limit(self, max: usize) -> Self {
+        assert!(max > 0);
+        Self {
+            max_limit: max,
+            ..self
+        }
+    }
 }
 
-impl LimitAlgorithm for AIMDLimit {
+impl LimitAlgorithm for AimdLimit {
     fn initial_limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
@@ -98,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let aimd = AIMDLimit::new_with_limit(10)
+        let aimd = AimdLimit::new_with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
 

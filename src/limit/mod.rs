@@ -6,7 +6,7 @@ mod aimd;
 mod gradient2;
 mod vegas;
 
-pub use aimd::AIMDLimit;
+pub use aimd::AimdLimit;
 
 pub trait LimitAlgorithm {
     fn initial_limit(&self) -> usize;
