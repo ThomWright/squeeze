@@ -109,6 +109,15 @@ Client -> API -> internal system -> database
 - TODO: Need to think about this one
 - End-to-end principle, same as for retries
 
+## Caveats
+
+TODO:
+
+- Loss-based algorithms require a reliable signal for load-based errors.
+  - If configured to reduce concurrency for non-load-based errors, they can exacerbate unavailability when these errors occur.
+- Delay-based algorithms work more reliably with predictable latency.
+  - For example, short bursts of increased latency from GC pauses could cause an outsized reduction in concurrency limits.
+
 ## FAQ
 
 > Does this require coordination between multiple processes?
@@ -119,6 +128,10 @@ No! The congestion detection is based on TCP congestion control algorithms which
 
 - Downstream - system receiving requests or messages
 - Upstream - system sending requests or messages
+
+## Installing, running and testing
+
+TODO:
 
 ## Prior art
 

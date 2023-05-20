@@ -1,13 +1,21 @@
 use std::{cmp::Reverse, collections::BinaryHeap, time::Duration};
 
+use itertools::Itertools;
 use rand::{prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
-use statrs::distribution::{Erlang, Exp};
+use statrs::{
+    distribution::{Erlang, Exp},
+    statistics::Distribution as StatDist,
+};
+use tokio::time::Instant;
 
 use squeeze::{
     limit::{AimdLimit, LimitAlgorithm},
     Limiter, ReadingResult, Timer,
 };
-use tokio::time::Instant;
+
+mod iter_ext;
+
+use iter_ext::MeanExt;
 
 struct Simulation {
     duration: Duration,
@@ -84,6 +92,7 @@ enum EventType<'t> {
 }
 
 struct Summary {
+    started_at: Instant,
     event_log: Vec<EventLogEntry>,
     requests: Vec<RequestSummary>,
 }
@@ -124,6 +133,10 @@ impl Client {
     fn next_arrival_in(&mut self, rng: &mut SmallRng) -> Duration {
         let dt = self.interarrival.sample(rng);
         Duration::from_secs_f64(dt)
+    }
+
+    fn rps(&self) -> f64 {
+        self.interarrival.rate()
     }
 }
 
@@ -178,6 +191,10 @@ impl Server {
             },
         }
     }
+
+    fn mean_latency(&self) -> f64 {
+        self.latency.mean().unwrap()
+    }
 }
 
 impl From<LatencyProfile> for Erlang {
@@ -203,6 +220,15 @@ impl Ord for Event<'_> {
     }
 }
 
+impl<'t> EventType<'_> {
+    fn type_name(&self) -> String {
+        match self {
+            EventType::StartRequest => "StartRequest".to_string(),
+            EventType::EndRequest { .. } => "EndRequest".to_string(),
+        }
+    }
+}
+
 impl Simulation {
     async fn run(&mut self) -> Summary {
         tokio::time::pause();
@@ -210,7 +236,7 @@ impl Simulation {
 
         let seed = rand::random();
         let mut rng = SmallRng::seed_from_u64(seed);
-        println!("Seed: {seed}");
+        println!("Seed: {seed}\n");
 
         // Priority queue of events (min heap).
         let mut queue = BinaryHeap::new();
@@ -222,10 +248,11 @@ impl Simulation {
         let mut requests = vec![];
         let mut event_log = vec![];
 
+        let mut current_time = start;
         while let Some(Reverse(event)) = queue.pop() {
-            let dt = event.time.duration_since(Instant::now());
+            let dt = event.time.duration_since(current_time);
             tokio::time::advance(dt).await;
-            let current_time = Instant::now();
+            current_time = Instant::now();
 
             match event.typ {
                 EventType::StartRequest => {
@@ -275,7 +302,9 @@ impl Simulation {
             }
         }
 
+        requests.sort_by(|r1, r2| r1.start_time.cmp(&r2.start_time));
         Summary {
+            started_at: start,
             event_log,
             requests,
         }
@@ -321,37 +350,71 @@ impl Summary {
             .max()
             .unwrap_or(0)
     }
+    fn mean_interarrival_time(&self) -> Duration {
+        self.requests
+            .iter()
+            .map(|r| r.start_time)
+            .tuple_windows()
+            .map(|(a, b)| b - a)
+            .mean()
+    }
+
+    fn print_summary(&self) {
+        // println!("{:#?}", summary.event_log);
+        // println!("{:#?}", summary.requests);
+
+        println!("Summary");
+        println!("=======");
+
+        println!("Requests: {}", self.total_requests());
+        println!("Rejected: {}", self.total_rejected());
+
+        println!(
+            "Mean interarrival time: {:#?}",
+            self.mean_interarrival_time()
+        );
+
+        println!("Mean latency: {:#?}", self.mean_latency());
+        println!("Max. concurrency: {:#?}", self.max_concurrency());
+    }
 }
 
 #[tokio::test]
 async fn test() {
-    let mut simulation = Simulation {
-        duration: Duration::from_secs(30),
+    let client = Client::new_with_rps(100.0);
 
-        client: Client::new_with_rps(25.0),
-        server: Server::new(
-            Limiter::new(LimitWrapper::Aimd(
-                AimdLimit::new_with_initial_limit(10)
-                    .with_max_limit(20)
-                    .decrease_factor(0.9)
-                    .increase_by(1),
-            )),
-            LatencyProfile {
-                tasks: 2,
-                task_rate: 10.0,
-            },
-            0.01,
-        ),
+    let server = Server::new(
+        Limiter::new(LimitWrapper::Aimd(
+            AimdLimit::new_with_initial_limit(10)
+                .with_max_limit(20)
+                .decrease_factor(0.9)
+                .increase_by(1),
+        )),
+        LatencyProfile {
+            tasks: 2,
+            task_rate: 10.0,
+        },
+        0.01,
+    );
+
+    println!("Client");
+    println!("======");
+    println!("RPS: {}", client.rps());
+    println!();
+    println!("Server");
+    println!("======");
+    println!("Mean latency: {}", server.mean_latency());
+    println!();
+    // TODO: print limiter info
+
+    let mut simulation = Simulation {
+        duration: Duration::from_secs(1),
+
+        client,
+        server,
     };
 
     let summary = simulation.run().await;
 
-    println!("{:#?}", summary.event_log);
-    println!("{:#?}", summary.requests);
-
-    println!("Requests: {}", summary.total_requests());
-    println!("Rejected: {}", summary.total_rejected());
-
-    println!("Mean latency: {:#?}", summary.mean_latency());
-    println!("Max. concurrency: {:#?}", summary.max_concurrency());
+    summary.print_summary();
 }
