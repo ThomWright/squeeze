@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Reading, ReadingResult};
+use crate::{limit::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
@@ -65,10 +65,10 @@ impl LimitAlgorithm for AimdLimit {
         self.limit.load(Ordering::Acquire)
     }
 
-    fn update(&self, reading: Reading) -> usize {
-        use ReadingResult::*;
-        match reading.result {
-            Success => {
+    fn update(&self, sample: Sample) -> usize {
+        use Outcome::*;
+        match sample.result {
+            Some(Success) => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
                         let limit = limit + self.increase_by;
@@ -78,7 +78,7 @@ impl LimitAlgorithm for AimdLimit {
 
                 self.limit.load(Ordering::Acquire)
             }
-            Overload => {
+            Some(Overload) => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
                         let limit = limit as f32 * self.decrease_factor;
@@ -93,7 +93,7 @@ impl LimitAlgorithm for AimdLimit {
 
                 self.limit.load(Ordering::Acquire)
             }
-            Ignore => self.limit.load(Ordering::Acquire),
+            None => self.limit.load(Ordering::Acquire),
         }
     }
 }
@@ -113,15 +113,15 @@ mod tests {
         let limiter = Limiter::new(aimd);
 
         let timer = limiter.try_acquire().unwrap();
-        limiter.record_reading(timer, ReadingResult::Overload).await;
+        limiter.release(timer, Some(Outcome::Overload)).await;
         assert_eq!(limiter.limit(), 5);
 
         let timer = limiter.try_acquire().unwrap();
-        limiter.record_reading(timer, ReadingResult::Success).await;
+        limiter.release(timer, Some(Outcome::Success)).await;
         assert_eq!(limiter.limit(), 6);
 
         let timer = limiter.try_acquire().unwrap();
-        limiter.record_reading(timer, ReadingResult::Ignore).await;
+        limiter.release(timer, None).await;
         assert_eq!(limiter.limit(), 6);
     }
 }

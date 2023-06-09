@@ -12,12 +12,39 @@ use tokio::{
     time::{timeout, Instant},
 };
 
-use crate::limit::LimitAlgorithm;
+use crate::limit::{LimitAlgorithm, Sample};
 
+/// Limits the number of concurrent jobs.
+///
+/// The limit will be automatically adjusted based on observed latency (delay) and/or failures
+/// caused by overload (loss).
+#[derive(Debug)]
 pub struct Limiter<T> {
     limit_algo: T,
     semaphore: Arc<Semaphore>,
     limit: AtomicUsize,
+}
+
+#[derive(Debug)]
+pub struct Timer<'t> {
+    permit: SemaphorePermit<'t>,
+    start: Instant,
+}
+
+/// A snapshot of the state of the limiter.
+///
+/// Not guaranteed to be consistent under high concurrency.
+#[derive(Debug, Clone, Copy)]
+pub struct LimiterState {
+    limit: usize,
+    available: usize,
+}
+
+// TODO: can we remove the Ord impls?
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Outcome {
+    Success,
+    Overload,
 }
 
 impl<T> Limiter<T>
@@ -55,13 +82,13 @@ where
         }
     }
 
-    pub async fn record_reading(&self, timer: Timer<'_>, result: ReadingResult) {
-        let reading = Reading {
+    pub async fn release(&self, timer: Timer<'_>, result: Option<Outcome>) {
+        let sample = Sample {
             latency: timer.start.elapsed(),
             result,
         };
 
-        let new_limit = self.limit_algo.update(reading);
+        let new_limit = self.limit_algo.update(sample);
 
         let old_limit = self.limit.swap(new_limit, Ordering::SeqCst);
 
@@ -93,12 +120,13 @@ where
     pub fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
-}
 
-#[derive(Debug)]
-pub struct Timer<'t> {
-    permit: SemaphorePermit<'t>,
-    start: Instant,
+    pub fn state(&self) -> LimiterState {
+        LimiterState {
+            limit: self.limit(),
+            available: self.available(),
+        }
+    }
 }
 
 impl<'t> Timer<'t> {
@@ -110,21 +138,23 @@ impl<'t> Timer<'t> {
     }
 }
 
-pub struct Reading {
-    pub(crate) latency: Duration,
-    pub(crate) result: ReadingResult,
-}
+impl LimiterState {
+    pub fn available(&self) -> usize {
+        self.available
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ReadingResult {
-    Success,
-    Ignore,
-    Overload,
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn concurrency(&self) -> usize {
+        self.limit - self.available
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{limit::FixedLimit, Limiter, ReadingResult};
+    use crate::{limit::FixedLimit, Limiter, Outcome};
 
     #[tokio::test]
     async fn it_works() {
@@ -132,7 +162,7 @@ mod tests {
 
         let timer = limiter.try_acquire().unwrap();
 
-        limiter.record_reading(timer, ReadingResult::Success).await;
+        limiter.release(timer, Some(Outcome::Success)).await;
 
         assert_eq!(limiter.limit(), 10);
     }

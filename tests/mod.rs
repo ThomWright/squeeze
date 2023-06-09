@@ -9,8 +9,8 @@ use statrs::{
 use tokio::time::Instant;
 
 use squeeze::{
-    limit::{AimdLimit, LimitAlgorithm},
-    Limiter, ReadingResult, Timer,
+    limit::{AimdLimit, LimitAlgorithm, Sample},
+    Limiter, LimiterState, Outcome, Timer,
 };
 
 mod iter_ext;
@@ -23,6 +23,8 @@ struct Simulation {
     server: Server,
 }
 
+type Id = usize;
+
 enum LimitWrapper {
     Aimd(AimdLimit),
 }
@@ -32,20 +34,23 @@ impl LimitAlgorithm for LimitWrapper {
             LimitWrapper::Aimd(l) => l.initial_limit(),
         }
     }
-    fn update(&self, reading: squeeze::Reading) -> usize {
+    fn update(&self, reading: Sample) -> usize {
         match self {
             LimitWrapper::Aimd(l) => l.update(reading),
         }
     }
 }
 
+/// Models a Poisson process.
 struct Client {
+    limiter: Option<Limiter<LimitWrapper>>,
+
     /// Poisson process, exponential interarrival times.
     interarrival: Exp,
 }
 
 struct Server {
-    limiter: Limiter<LimitWrapper>,
+    limiter: Option<Limiter<LimitWrapper>>,
 
     latency: Erlang,
 
@@ -60,79 +65,142 @@ struct LatencyProfile {
     task_rate: f64,
 }
 
-struct Request<'t> {
-    latency: Duration,
+#[derive(Debug)]
+struct LimiterToken<'t> {
     timer: Timer<'t>,
 
     /// Limiter state just after the request started.
-    limit_state: LimitState,
+    limit_state: LimiterState,
 }
 
-struct RequestResult {
-    result: ReadingResult,
+struct ServerResponse<'t> {
+    latency: Duration,
+    server_state: Option<LimiterToken<'t>>,
+}
+
+struct RequestOutcome {
+    result: Outcome,
 
     /// Limiter state just after the request finished.
-    limit_state: LimitState,
+    limit_state: LimiterState,
 }
 
+/// Processed by a [`Simulation`].
 #[derive(Debug)]
 struct Event<'t> {
     time: Instant,
-    typ: EventType<'t>,
+    typ: Action<'t>,
 }
 #[derive(Debug)]
-enum EventType<'t> {
-    StartRequest,
+enum Action<'t> {
+    StartRequest {
+        client_id: Id,
+    },
     EndRequest {
         start_time: Instant,
-        /// Limiter state just after the request started.
-        original_limit_state: LimitState,
-        timer: Timer<'t>,
+        client_id: Id,
+        server_id: Id,
+        client: Option<LimiterToken<'t>>,
+        server: Option<LimiterToken<'t>>,
     },
 }
 
+/// Summarises the outcome of a simulation run.
 struct Summary {
     started_at: Instant,
-    event_log: Vec<EventLogEntry>,
+    event_log: Vec<event_log::Item>,
     requests: Vec<RequestSummary>,
 }
 
 #[derive(Debug)]
 struct RequestSummary {
     start_time: Instant,
-    /// Limiter state just after this request was accepted/rejected.
-    start_state: LimitState,
-    /// Limiter state just after this request finished.
-    end_state: LimitState,
     end_time: Instant,
     latency: Duration,
-    result: ReadingResult,
+    result: Outcome,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct LimitState {
-    limit: usize,
-    available: usize,
-}
+mod event_log {
+    use super::*;
 
-#[derive(Debug)]
-enum EventLogEntry {
-    Accepted(LimitState),
-    Rejected(LimitState),
-    Finished(ReadingResult, LimitState),
+    #[derive(Debug)]
+    pub enum Item {
+        Client(Id, LimiterEvent),
+        Server(Id, LimiterEvent),
+    }
+
+    /// ```text
+    /// <limiter?> N -> No log
+    ///          ` Y -> <full?> N -> Accepted -> Finished
+    ///                       ` Y -> Rejected
+    /// ```
+    #[derive(Debug)]
+    pub enum LimiterEvent {
+        Accepted(LimiterState),
+        Rejected(LimiterState),
+        Finished(Outcome, LimiterState),
+    }
+
+    impl Item {
+        pub fn limit_state(&self) -> Option<LimiterState> {
+            use Item::*;
+            use LimiterEvent::*;
+            let event = match self {
+                Client(_, event) => event,
+                Server(_, event) => event,
+            };
+            match event {
+                Accepted(ls) => Some(*ls),
+                Rejected(ls) => Some(*ls),
+                Finished(_, ls) => Some(*ls),
+            }
+        }
+    }
 }
 
 impl Client {
     /// Create a client which sends `rps` requests per second on average.
-    fn new_with_rps(rps: f64) -> Self {
+    fn new_with_rps(limiter: Option<Limiter<LimitWrapper>>, rps: f64) -> Self {
         Self {
+            limiter,
             interarrival: Exp::new(rps).unwrap(),
         }
     }
 
-    fn next_arrival_in(&mut self, rng: &mut SmallRng) -> Duration {
+    fn next_arrival_in(&self, rng: &mut SmallRng) -> Duration {
         let dt = self.interarrival.sample(rng);
         Duration::from_secs_f64(dt)
+    }
+
+    /// Send a request.
+    fn send_req(&self) -> Result<Option<LimiterToken>, LimiterState> {
+        self.limiter
+            .as_ref()
+            .map(|limiter| {
+                limiter
+                    .try_acquire()
+                    .map(|timer| LimiterToken {
+                        timer,
+                        limit_state: limiter.state(),
+                    })
+                    .ok_or(limiter.state())
+            })
+            .transpose()
+    }
+
+    /// Receive a response.
+    async fn res(&self, timer: Timer<'_>, result: Outcome) -> RequestOutcome {
+        let limiter = self
+            .limiter
+            .as_ref()
+            .expect("Shouldn't call Client::res() unless it has a limiter");
+
+        limiter.release(timer, Some(result)).await;
+
+        RequestOutcome {
+            result,
+            limit_state: limiter.state(),
+        }
     }
 
     fn rps(&self) -> f64 {
@@ -143,7 +211,7 @@ impl Client {
 impl Server {
     /// Create a server with a concurrency limiter, a latency distribution and a failure rate.
     fn new(
-        limiter: Limiter<LimitWrapper>,
+        limiter: Option<Limiter<LimitWrapper>>,
         latency_profile: LatencyProfile,
         failure_rate: f64,
     ) -> Self {
@@ -156,39 +224,44 @@ impl Server {
     }
 
     /// Start processing a request.
-    fn start(&self, rng: &mut SmallRng) -> Result<Request, LimitState> {
+    fn recv_req(&self, rng: &mut SmallRng) -> Result<ServerResponse, LimiterState> {
+        let latency = Duration::from_secs_f64(self.latency.sample(rng));
         self.limiter
-            .try_acquire()
-            .map(|timer| Request {
-                latency: Duration::from_secs_f64(self.latency.sample(rng)),
-                timer,
-                limit_state: LimitState {
-                    limit: self.limiter.limit(),
-                    available: self.limiter.available(),
-                },
+            .as_ref()
+            .map(|limiter| {
+                limiter
+                    .try_acquire()
+                    .map(|timer| LimiterToken {
+                        timer,
+                        limit_state: limiter.state(),
+                    })
+                    .ok_or(limiter.state())
             })
-            .ok_or(LimitState {
-                limit: self.limiter.limit(),
-                available: self.limiter.available(),
+            .transpose()
+            .map(|limited| ServerResponse {
+                latency,
+                server_state: limited,
             })
     }
 
-    /// Finish processing a request.
-    async fn end(&self, timer: Timer<'_>, rng: &mut SmallRng) -> RequestResult {
+    /// Return a response.
+    async fn res(&self, timer: Timer<'_>, rng: &mut SmallRng) -> RequestOutcome {
+        let limiter = self
+            .limiter
+            .as_ref()
+            .expect("Shouldn't call Client::res() unless it has a limiter");
+
         let result = if rng.gen_range(0.0..=1.0) > self.failure_rate {
-            ReadingResult::Success
+            Outcome::Success
         } else {
-            ReadingResult::Overload
+            Outcome::Overload
         };
 
-        self.limiter.record_reading(timer, result).await;
+        limiter.release(timer, Some(result)).await;
 
-        RequestResult {
+        RequestOutcome {
             result,
-            limit_state: LimitState {
-                limit: self.limiter.limit(),
-                available: self.limiter.available(),
-            },
+            limit_state: limiter.state(),
         }
     }
 
@@ -220,15 +293,6 @@ impl Ord for Event<'_> {
     }
 }
 
-impl<'t> EventType<'_> {
-    fn type_name(&self) -> String {
-        match self {
-            EventType::StartRequest => "StartRequest".to_string(),
-            EventType::EndRequest { .. } => "EndRequest".to_string(),
-        }
-    }
-}
-
 impl Simulation {
     async fn run(&mut self) -> Summary {
         tokio::time::pause();
@@ -242,102 +306,188 @@ impl Simulation {
         let mut queue = BinaryHeap::new();
         queue.push(Reverse(Event {
             time: start,
-            typ: EventType::StartRequest,
+            typ: Action::StartRequest { client_id: 0 },
         }));
 
-        let mut requests = vec![];
+        let mut requests = BinaryHeap::new();
         let mut event_log = vec![];
 
         let mut current_time = start;
         while let Some(Reverse(event)) = queue.pop() {
-            let dt = event.time.duration_since(current_time);
-            tokio::time::advance(dt).await;
-            current_time = Instant::now();
+            current_time = {
+                let dt = event.time.duration_since(current_time);
+                tokio::time::advance(dt).await;
+                Instant::now()
+            };
 
             match event.typ {
-                EventType::StartRequest => {
-                    match self.server.start(&mut rng) {
-                        Ok(req) => {
-                            queue.push(Reverse(Event {
-                                time: current_time + req.latency,
-                                typ: EventType::EndRequest {
-                                    start_time: current_time,
-                                    timer: req.timer,
-                                    original_limit_state: req.limit_state,
-                                },
-                            }));
-                            event_log.push(EventLogEntry::Accepted(req.limit_state));
+                Action::StartRequest { client_id } => {
+                    let rejected = match self.client.send_req() {
+                        Ok(client_state) => {
+                            if let Some(ref s) = client_state {
+                                event_log.push(event_log::Item::Client(
+                                    client_id,
+                                    event_log::LimiterEvent::Accepted(s.limit_state),
+                                ));
+                            }
+
+                            match self.server.recv_req(&mut rng) {
+                                Ok(res) => {
+                                    if let Some(ref s) = res.server_state {
+                                        event_log.push(event_log::Item::Server(
+                                            0,
+                                            event_log::LimiterEvent::Accepted(s.limit_state),
+                                        ));
+                                    }
+
+                                    queue.push(Reverse(Event {
+                                        time: current_time + res.latency,
+                                        typ: Action::EndRequest {
+                                            client_id,
+                                            server_id: 0,
+                                            start_time: current_time,
+                                            client: client_state,
+                                            server: res.server_state,
+                                        },
+                                    }));
+
+                                    false
+                                }
+                                Err(limit_state) => {
+                                    if let Some(client_state) = client_state {
+                                        let req_outcome = self
+                                            .client
+                                            .res(client_state.timer, Outcome::Overload)
+                                            .await;
+
+                                        event_log.push(event_log::Item::Client(
+                                            client_id,
+                                            event_log::LimiterEvent::Finished(
+                                                Outcome::Overload,
+                                                req_outcome.limit_state,
+                                            ),
+                                        ));
+                                    }
+                                    event_log.push(event_log::Item::Server(
+                                        0,
+                                        event_log::LimiterEvent::Rejected(limit_state),
+                                    ));
+
+                                    true
+                                }
+                            }
                         }
-                        Err(limit_state) => {
-                            event_log.push(EventLogEntry::Rejected(limit_state));
+                        Err(limiter_state) => {
+                            event_log.push(event_log::Item::Client(
+                                client_id,
+                                event_log::LimiterEvent::Rejected(limiter_state),
+                            ));
+
+                            true
                         }
                     };
+
+                    if rejected {
+                        requests.push(RequestSummary {
+                            start_time: current_time,
+                            end_time: current_time,
+                            latency: Duration::ZERO,
+                            result: Outcome::Overload,
+                        });
+                    }
 
                     if current_time.duration_since(start) < self.duration {
                         let dt = self.client.next_arrival_in(&mut rng);
                         let event = Event {
                             time: current_time + dt,
-                            typ: EventType::StartRequest,
+                            typ: Action::StartRequest { client_id },
                         };
                         queue.push(Reverse(event));
                     }
                 }
 
-                EventType::EndRequest {
+                Action::EndRequest {
                     start_time,
-                    timer,
-                    original_limit_state,
+                    client_id,
+                    server_id,
+                    client,
+                    server,
                 } => {
-                    let result = self.server.end(timer, &mut rng).await;
+                    let server_result = if let Some(limiter_state) = server {
+                        let result = self.server.res(limiter_state.timer, &mut rng).await;
+
+                        event_log.push(event_log::Item::Server(
+                            server_id,
+                            event_log::LimiterEvent::Finished(result.result, result.limit_state),
+                        ));
+
+                        result.result
+                    } else {
+                        Outcome::Success
+                    };
+
+                    let client_result = if let Some(client_state) = client {
+                        let result = self.client.res(client_state.timer, server_result).await;
+
+                        event_log.push(event_log::Item::Client(
+                            client_id,
+                            event_log::LimiterEvent::Finished(result.result, result.limit_state),
+                        ));
+
+                        result.result
+                    } else {
+                        Outcome::Success
+                    };
+
                     requests.push(RequestSummary {
                         start_time,
                         end_time: current_time,
                         latency: current_time.duration_since(start_time),
-                        start_state: original_limit_state,
-                        end_state: result.limit_state,
-                        result: result.result,
+                        result: client_result,
                     });
-                    event_log.push(EventLogEntry::Finished(result.result, result.limit_state));
                 }
             }
         }
 
-        requests.sort_by(|r1, r2| r1.start_time.cmp(&r2.start_time));
         Summary {
             started_at: start,
             event_log,
-            requests,
+            requests: requests.into_sorted_vec(),
         }
     }
 }
 
-impl LimitState {
-    fn concurrency(&self) -> usize {
-        self.limit - self.available
+impl PartialEq for RequestSummary {
+    fn eq(&self, other: &Self) -> bool {
+        self.start_time.eq(&other.start_time)
     }
 }
-
-impl EventLogEntry {
-    fn limit_state(&self) -> LimitState {
-        match self {
-            EventLogEntry::Accepted(ls) => *ls,
-            EventLogEntry::Rejected(ls) => *ls,
-            EventLogEntry::Finished(_, ls) => *ls,
-        }
+impl Eq for RequestSummary {}
+impl PartialOrd for RequestSummary {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RequestSummary {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.start_time.cmp(&other.start_time)
     }
 }
 
 impl Summary {
     fn total_requests(&self) -> usize {
-        self.event_log
-            .iter()
-            .filter(|el| matches!(el, EventLogEntry::Accepted(_) | EventLogEntry::Rejected(_)))
-            .count()
+        self.requests.len()
     }
     fn total_rejected(&self) -> usize {
         self.event_log
             .iter()
-            .filter(|el| matches!(el, EventLogEntry::Rejected(_)))
+            .filter(|el| {
+                matches!(
+                    el,
+                    event_log::Item::Client(_, event_log::LimiterEvent::Rejected(..))
+                        | event_log::Item::Server(_, event_log::LimiterEvent::Rejected(..))
+                )
+            })
             .count()
     }
     fn mean_latency(&self) -> Duration {
@@ -346,7 +496,11 @@ impl Summary {
     fn max_concurrency(&self) -> usize {
         self.event_log
             .iter()
-            .map(|log| log.limit_state().concurrency())
+            .map(|log| {
+                log.limit_state()
+                    .map(|l| l.concurrency())
+                    .unwrap_or_default()
+            })
             .max()
             .unwrap_or(0)
     }
@@ -360,8 +514,7 @@ impl Summary {
     }
 
     fn print_summary(&self) {
-        // println!("{:#?}", summary.event_log);
-        // println!("{:#?}", summary.requests);
+        // println!("{:#?}", self.requests);
 
         println!("Summary");
         println!("=======");
@@ -381,15 +534,20 @@ impl Summary {
 
 #[tokio::test]
 async fn test() {
-    let client = Client::new_with_rps(100.0);
+    let simulation_duration = Duration::from_secs(1);
 
-    let server = Server::new(
-        Limiter::new(LimitWrapper::Aimd(
+    let client = Client::new_with_rps(
+        Some(Limiter::new(LimitWrapper::Aimd(
             AimdLimit::new_with_initial_limit(10)
                 .with_max_limit(20)
                 .decrease_factor(0.9)
                 .increase_by(1),
-        )),
+        ))),
+        100.0,
+    );
+
+    let server = Server::new(
+        None,
         LatencyProfile {
             tasks: 2,
             task_rate: 10.0,
@@ -397,6 +555,10 @@ async fn test() {
         0.01,
     );
 
+    println!("Duration");
+    println!("========");
+    println!("{:#?}", simulation_duration);
+    println!();
     println!("Client");
     println!("======");
     println!("RPS: {}", client.rps());
@@ -408,7 +570,7 @@ async fn test() {
     // TODO: print limiter info
 
     let mut simulation = Simulation {
-        duration: Duration::from_secs(1),
+        duration: simulation_duration,
 
         client,
         server,

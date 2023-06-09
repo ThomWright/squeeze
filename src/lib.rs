@@ -1,4 +1,4 @@
 pub mod limit;
 mod limiter;
 
-pub use limiter::{Limiter, Reading, ReadingResult, Timer};
+pub use limiter::{Limiter, LimiterState, Outcome, Timer};
