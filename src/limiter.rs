@@ -26,13 +26,14 @@ pub struct Limiter<T> {
     limit: AtomicUsize,
 
     /// Best-effort
-    in_flight: AtomicUsize,
+    in_flight: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
 pub struct Timer<'t> {
-    permit: SemaphorePermit<'t>,
+    _permit: SemaphorePermit<'t>,
     start: Instant,
+    in_flight: Arc<AtomicUsize>,
 }
 
 /// A snapshot of the state of the limiter.
@@ -62,7 +63,7 @@ where
             limit_algo,
             semaphore: Arc::new(Semaphore::new(initial_permits)),
             limit: AtomicUsize::new(initial_permits),
-            in_flight: AtomicUsize::new(0),
+            in_flight: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -73,7 +74,7 @@ where
         match self.semaphore.try_acquire() {
             Ok(permit) => {
                 self.in_flight.fetch_add(1, Ordering::AcqRel);
-                Some(Timer::new(permit))
+                Some(Timer::new(permit, self.in_flight.clone()))
             }
             Err(TryAcquireError::NoPermits) => None,
             Err(TryAcquireError::Closed) => {
@@ -87,7 +88,7 @@ where
     /// Returns `None` if there are none available for `duration`.
     pub async fn acquire_timeout(&self, duration: Duration) -> Option<Timer<'_>> {
         match timeout(duration, self.semaphore.acquire()).await {
-            Ok(Ok(permit)) => Some(Timer::new(permit)),
+            Ok(Ok(permit)) => Some(Timer::new(permit, self.in_flight.clone())),
             Err(_) => None,
 
             Ok(Err(_)) => {
@@ -136,9 +137,7 @@ where
             }
         }
 
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-
-        drop(timer.permit);
+        drop(timer);
     }
 
     pub(crate) fn available(&self) -> usize {
@@ -163,11 +162,18 @@ where
 }
 
 impl<'t> Timer<'t> {
-    fn new(permit: SemaphorePermit<'t>) -> Self {
+    fn new(permit: SemaphorePermit<'t>, in_flight: Arc<AtomicUsize>) -> Self {
         Self {
-            permit,
+            _permit: permit,
             start: Instant::now(),
+            in_flight,
         }
+    }
+}
+
+impl Drop for Timer<'_> {
+    fn drop(&mut self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
