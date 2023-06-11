@@ -498,7 +498,7 @@ impl Summary {
             .iter()
             .map(|log| {
                 log.limit_state()
-                    .map(|l| l.concurrency())
+                    .map(|l| l.in_flight())
                     .unwrap_or_default()
             })
             .max()

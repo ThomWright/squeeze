@@ -18,7 +18,7 @@ pub trait LimitAlgorithm {
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub(crate) latency: Duration,
-    pub(crate) result: Option<Outcome>,
+    pub(crate) outcome: Outcome,
 }
 
 pub struct FixedLimit(usize);

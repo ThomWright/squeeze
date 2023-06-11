@@ -67,18 +67,15 @@ impl LimitAlgorithm for AimdLimit {
 
     fn update(&self, sample: Sample) -> usize {
         use Outcome::*;
-        match sample.result {
-            Some(Success) => {
-                self.limit
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                        let limit = limit + self.increase_by;
-                        Some(limit.clamp(self.min_limit, self.max_limit))
-                    })
-                    .expect("we always return Some(limit)");
-
-                self.limit.load(Ordering::Acquire)
-            }
-            Some(Overload) => {
+        match sample.outcome {
+            Success => self
+                .limit
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
+                    let limit = limit + self.increase_by;
+                    Some(limit.clamp(self.min_limit, self.max_limit))
+                })
+                .expect("we always return Some(limit)"),
+            Overload => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
                         let limit = limit as f32 * self.decrease_factor;
@@ -89,11 +86,8 @@ impl LimitAlgorithm for AimdLimit {
 
                         Some(limit.clamp(self.min_limit, self.max_limit))
                     })
-                    .expect("we always return Some(limit)");
-
-                self.limit.load(Ordering::Acquire)
+                    .expect("we always return Some(limit)")
             }
-            None => self.limit.load(Ordering::Acquire),
         }
     }
 }
