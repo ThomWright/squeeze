@@ -68,13 +68,14 @@ impl LimitAlgorithm for AimdLimit {
     fn update(&self, sample: Sample) -> usize {
         use Outcome::*;
         match sample.outcome {
-            Success => self
-                .limit
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                    let limit = limit + self.increase_by;
-                    Some(limit.clamp(self.min_limit, self.max_limit))
-                })
-                .expect("we always return Some(limit)"),
+            Success => {
+                self.limit
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
+                        let limit = limit + self.increase_by;
+                        Some(limit.clamp(self.min_limit, self.max_limit))
+                    })
+                    .expect("we always return Some(limit)");
+            }
             Overload => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
@@ -86,14 +87,19 @@ impl LimitAlgorithm for AimdLimit {
 
                         Some(limit.clamp(self.min_limit, self.max_limit))
                     })
-                    .expect("we always return Some(limit)")
+                    .expect("we always return Some(limit)");
             }
         }
+        self.limit.load(Ordering::SeqCst)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Notify;
+
     use crate::Limiter;
 
     use super::*;
@@ -104,18 +110,21 @@ mod tests {
             .decrease_factor(0.5)
             .increase_by(1);
 
-        let limiter = Limiter::new(aimd);
+        let release_notifier = Arc::new(Notify::new());
+
+        let limiter = Limiter::new(aimd).with_release_notifier(release_notifier.clone());
 
         let timer = limiter.try_acquire().unwrap();
         limiter.release(timer, Some(Outcome::Overload)).await;
-        assert_eq!(limiter.limit(), 5);
+        release_notifier.notified().await;
+        assert_eq!(limiter.limit(), 5, "decrease");
 
         let timer = limiter.try_acquire().unwrap();
         limiter.release(timer, Some(Outcome::Success)).await;
-        assert_eq!(limiter.limit(), 6);
+        assert_eq!(limiter.limit(), 6, "increase");
 
         let timer = limiter.try_acquire().unwrap();
         limiter.release(timer, None).await;
-        assert_eq!(limiter.limit(), 6);
+        assert_eq!(limiter.limit(), 6, "ignore");
     }
 }

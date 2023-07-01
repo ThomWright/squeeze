@@ -27,6 +27,9 @@ pub struct Limiter<T> {
 
     /// Best-effort
     in_flight: Arc<AtomicUsize>,
+
+    #[cfg(test)]
+    notifier: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[derive(Debug)]
@@ -64,7 +67,17 @@ where
             semaphore: Arc::new(Semaphore::new(initial_permits)),
             limit: AtomicUsize::new(initial_permits),
             in_flight: Arc::new(AtomicUsize::new(0)),
+
+            #[cfg(test)]
+            notifier: None,
         }
+    }
+
+    /// In some cases permits are acquired asynchronously when updating the limit.
+    #[cfg(test)]
+    pub fn with_release_notifier(mut self, n: Arc<tokio::sync::Notify>) -> Self {
+        self.notifier = Some(n);
+        self
     }
 
     /// Try to immediately acquire a concurrency token.
@@ -117,9 +130,16 @@ where
             match new_limit.cmp(&old_limit) {
                 cmp::Ordering::Greater => {
                     self.semaphore.add_permits(new_limit - old_limit);
+
+                    #[cfg(test)]
+                    if let Some(n) = &self.notifier {
+                        n.notify_one();
+                    }
                 }
                 cmp::Ordering::Less => {
                     let semaphore = self.semaphore.clone();
+                    #[cfg(test)]
+                    let notifier = self.notifier.clone();
 
                     tokio::spawn(async move {
                         // If there aren't enough permits available then this will wait until enough
@@ -131,9 +151,20 @@ where
 
                         // Acquiring some permits and throwing them away reduces the available limit.
                         permits.forget();
+
+                        #[cfg(test)]
+                        if let Some(n) = notifier {
+                            n.notify_one();
+                        }
                     });
                 }
-                _ => {}
+                _ =>
+                {
+                    #[cfg(test)]
+                    if let Some(n) = &self.notifier {
+                        n.notify_one();
+                    }
+                }
             }
         }
 
