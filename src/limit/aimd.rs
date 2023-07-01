@@ -71,8 +71,13 @@ impl LimitAlgorithm for AimdLimit {
             Success => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                        let limit = limit + self.increase_by;
-                        Some(limit.clamp(self.min_limit, self.max_limit))
+                        // Only increase the limit if we're using more than half of it
+                        if sample.in_flight > limit / 2 {
+                            let limit = limit + self.increase_by;
+                            Some(limit.clamp(self.min_limit, self.max_limit))
+                        } else {
+                            Some(limit)
+                        }
                     })
                     .expect("we always return Some(limit)");
             }
@@ -105,7 +110,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn it_works() {
+    async fn should_decrease_limit_on_overload() {
         let aimd = AimdLimit::new_with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
@@ -117,14 +122,49 @@ mod tests {
         let timer = limiter.try_acquire().unwrap();
         limiter.release(timer, Some(Outcome::Overload)).await;
         release_notifier.notified().await;
-        assert_eq!(limiter.limit(), 5, "decrease");
+        assert_eq!(limiter.limit(), 5, "overload: decrease");
+    }
+
+    #[tokio::test]
+    async fn should_increase_limit_on_success_when_using_gt_half_limit() {
+        let aimd = AimdLimit::new_with_initial_limit(4)
+            .decrease_factor(0.5)
+            .increase_by(1);
+
+        let limiter = Limiter::new(aimd);
 
         let timer = limiter.try_acquire().unwrap();
+        let _timer = limiter.try_acquire().unwrap();
+        let _timer = limiter.try_acquire().unwrap();
+
         limiter.release(timer, Some(Outcome::Success)).await;
-        assert_eq!(limiter.limit(), 6, "increase");
+        assert_eq!(limiter.limit(), 5, "success: increase");
+    }
+
+    #[tokio::test]
+    async fn should_not_change_limit_on_success_when_using_lt_half_limit() {
+        let aimd = AimdLimit::new_with_initial_limit(4)
+            .decrease_factor(0.5)
+            .increase_by(1);
+
+        let limiter = Limiter::new(aimd);
+
+        let timer = limiter.try_acquire().unwrap();
+
+        limiter.release(timer, Some(Outcome::Success)).await;
+        assert_eq!(limiter.limit(), 4, "success: ignore when < half limit");
+    }
+
+    #[tokio::test]
+    async fn should_not_change_limit_when_no_outcome() {
+        let aimd = AimdLimit::new_with_initial_limit(10)
+            .decrease_factor(0.5)
+            .increase_by(1);
+
+        let limiter = Limiter::new(aimd);
 
         let timer = limiter.try_acquire().unwrap();
         limiter.release(timer, None).await;
-        assert_eq!(limiter.limit(), 6, "ignore");
+        assert_eq!(limiter.limit(), 10, "ignore");
     }
 }
