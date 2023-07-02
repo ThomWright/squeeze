@@ -6,17 +6,19 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
+
 use crate::{limit::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
 pub struct AimdLimit {
     limit: AtomicUsize,
-    decrease_factor: f32,
-    increase_by: usize,
-
     min_limit: usize,
     max_limit: usize,
+
+    decrease_factor: f32,
+    increase_by: usize,
 }
 
 impl AimdLimit {
@@ -28,10 +30,10 @@ impl AimdLimit {
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         Self {
             limit: AtomicUsize::new(initial_limit),
-            decrease_factor: Self::DEFAULT_DECREASE_FACTOR,
-            increase_by: Self::DEFAULT_INCREASE,
             min_limit: Self::DEFAULT_MIN_LIMIT,
             max_limit: Self::DEFAULT_MAX_LIMIT,
+            decrease_factor: Self::DEFAULT_DECREASE_FACTOR,
+            increase_by: Self::DEFAULT_INCREASE,
         }
     }
 
@@ -60,18 +62,19 @@ impl AimdLimit {
     }
 }
 
+#[async_trait]
 impl LimitAlgorithm for AimdLimit {
-    fn initial_limit(&self) -> usize {
+    fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
 
-    fn update(&self, sample: Sample) -> usize {
+    async fn update(&self, sample: Sample) -> usize {
         use Outcome::*;
         match sample.outcome {
             Success => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                        // Only increase the limit if we're using more than half of it
+                        // Only increase the limit if we're using more than half of it.
                         if sample.in_flight > limit / 2 {
                             let limit = limit + self.increase_by;
                             Some(limit.clamp(self.min_limit, self.max_limit))

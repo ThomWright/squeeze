@@ -60,7 +60,7 @@ where
     T: LimitAlgorithm,
 {
     pub fn new(limit_algo: T) -> Self {
-        let initial_permits = limit_algo.initial_limit();
+        let initial_permits = limit_algo.limit();
         assert!(initial_permits > 0);
         Self {
             limit_algo,
@@ -120,10 +120,11 @@ where
         if let Some(outcome) = outcome {
             let sample = Sample {
                 latency: timer.start.elapsed(),
+                in_flight: self.in_flight(),
                 outcome,
             };
 
-            let new_limit = self.limit_algo.update(sample);
+            let new_limit = self.limit_algo.update(sample).await;
 
             let old_limit = self.limit.swap(new_limit, Ordering::SeqCst);
 
@@ -199,6 +200,13 @@ impl<'t> Timer<'t> {
             start: Instant::now(),
             in_flight,
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_latency(&mut self, latency: Duration) {
+        use std::ops::Sub;
+
+        self.start = Instant::now().sub(latency);
     }
 }
 

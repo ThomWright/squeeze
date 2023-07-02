@@ -1,5 +1,6 @@
 use std::{cmp::Reverse, collections::BinaryHeap, time::Duration};
 
+use async_trait::async_trait;
 use itertools::Itertools;
 use rand::{prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 use statrs::{
@@ -28,15 +29,16 @@ type Id = usize;
 enum LimitWrapper {
     Aimd(AimdLimit),
 }
+#[async_trait]
 impl LimitAlgorithm for LimitWrapper {
-    fn initial_limit(&self) -> usize {
+    fn limit(&self) -> usize {
         match self {
-            LimitWrapper::Aimd(l) => l.initial_limit(),
+            LimitWrapper::Aimd(l) => l.limit(),
         }
     }
-    fn update(&self, reading: Sample) -> usize {
+    async fn update(&self, reading: Sample) -> usize {
         match self {
-            LimitWrapper::Aimd(l) => l.update(reading),
+            LimitWrapper::Aimd(l) => l.update(reading).await,
         }
     }
 }
