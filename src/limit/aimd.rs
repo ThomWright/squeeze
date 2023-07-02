@@ -1,9 +1,3 @@
-//! Loss-based limit that does an additive increment as long as there are no errors
-//! and a multiplicative decrement when there is an error.
-//!
-//! - Loss-based
-//! - Additive increase, multiplicative decrease
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -12,6 +6,8 @@ use crate::{limit::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
+/// Loss-based congestion detection that does an additive increase when no load-based errors are
+/// observed and a multiplicative decrease when it detects an error.
 pub struct AimdLimit {
     limit: AtomicUsize,
     min_limit: usize,
@@ -122,8 +118,8 @@ mod tests {
 
         let limiter = Limiter::new(aimd).with_release_notifier(release_notifier.clone());
 
-        let timer = limiter.try_acquire().unwrap();
-        limiter.release(timer, Some(Outcome::Overload)).await;
+        let token = limiter.try_acquire().unwrap();
+        limiter.release(token, Some(Outcome::Overload)).await;
         release_notifier.notified().await;
         assert_eq!(limiter.limit(), 5, "overload: decrease");
     }
@@ -136,11 +132,11 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let timer = limiter.try_acquire().unwrap();
-        let _timer = limiter.try_acquire().unwrap();
-        let _timer = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().unwrap();
+        let _token = limiter.try_acquire().unwrap();
+        let _token = limiter.try_acquire().unwrap();
 
-        limiter.release(timer, Some(Outcome::Success)).await;
+        limiter.release(token, Some(Outcome::Success)).await;
         assert_eq!(limiter.limit(), 5, "success: increase");
     }
 
@@ -152,9 +148,9 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let timer = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().unwrap();
 
-        limiter.release(timer, Some(Outcome::Success)).await;
+        limiter.release(token, Some(Outcome::Success)).await;
         assert_eq!(limiter.limit(), 4, "success: ignore when < half limit");
     }
 
@@ -166,8 +162,8 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let timer = limiter.try_acquire().unwrap();
-        limiter.release(timer, None).await;
+        let token = limiter.try_acquire().unwrap();
+        limiter.release(token, None).await;
         assert_eq!(limiter.limit(), 10, "ignore");
     }
 }

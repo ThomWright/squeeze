@@ -11,7 +11,7 @@ use tokio::time::Instant;
 
 use squeeze::{
     limit::{AimdLimit, LimitAlgorithm, Sample},
-    Limiter, LimiterState, Outcome, Timer,
+    Limiter, LimiterState, Outcome, Token,
 };
 
 mod iter_ext;
@@ -69,7 +69,7 @@ struct LatencyProfile {
 
 #[derive(Debug)]
 struct LimiterToken<'t> {
-    timer: Timer<'t>,
+    token: Token<'t>,
 
     /// Limiter state just after the request started.
     limit_state: LimiterState,
@@ -181,8 +181,8 @@ impl Client {
             .map(|limiter| {
                 limiter
                     .try_acquire()
-                    .map(|timer| LimiterToken {
-                        timer,
+                    .map(|token| LimiterToken {
+                        token,
                         limit_state: limiter.state(),
                     })
                     .ok_or(limiter.state())
@@ -191,13 +191,13 @@ impl Client {
     }
 
     /// Receive a response.
-    async fn res(&self, timer: Timer<'_>, result: Outcome) -> RequestOutcome {
+    async fn res(&self, token: Token<'_>, result: Outcome) -> RequestOutcome {
         let limiter = self
             .limiter
             .as_ref()
             .expect("Shouldn't call Client::res() unless it has a limiter");
 
-        limiter.release(timer, Some(result)).await;
+        limiter.release(token, Some(result)).await;
 
         RequestOutcome {
             result,
@@ -233,8 +233,8 @@ impl Server {
             .map(|limiter| {
                 limiter
                     .try_acquire()
-                    .map(|timer| LimiterToken {
-                        timer,
+                    .map(|token| LimiterToken {
+                        token,
                         limit_state: limiter.state(),
                     })
                     .ok_or(limiter.state())
@@ -247,7 +247,7 @@ impl Server {
     }
 
     /// Return a response.
-    async fn res(&self, timer: Timer<'_>, rng: &mut SmallRng) -> RequestOutcome {
+    async fn res(&self, token: Token<'_>, rng: &mut SmallRng) -> RequestOutcome {
         let limiter = self
             .limiter
             .as_ref()
@@ -259,7 +259,7 @@ impl Server {
             Outcome::Overload
         };
 
-        limiter.release(timer, Some(result)).await;
+        limiter.release(token, Some(result)).await;
 
         RequestOutcome {
             result,
@@ -359,7 +359,7 @@ impl Simulation {
                                     if let Some(client_state) = client_state {
                                         let req_outcome = self
                                             .client
-                                            .res(client_state.timer, Outcome::Overload)
+                                            .res(client_state.token, Outcome::Overload)
                                             .await;
 
                                         event_log.push(event_log::Item::Client(
@@ -416,7 +416,7 @@ impl Simulation {
                     server,
                 } => {
                     let server_result = if let Some(limiter_state) = server {
-                        let result = self.server.res(limiter_state.timer, &mut rng).await;
+                        let result = self.server.res(limiter_state.token, &mut rng).await;
 
                         event_log.push(event_log::Item::Server(
                             server_id,
@@ -429,7 +429,7 @@ impl Simulation {
                     };
 
                     let client_result = if let Some(client_state) = client {
-                        let result = self.client.res(client_state.timer, server_result).await;
+                        let result = self.client.res(client_state.token, server_result).await;
 
                         event_log.push(event_log::Item::Client(
                             client_id,
@@ -498,11 +498,7 @@ impl Summary {
     fn max_concurrency(&self) -> usize {
         self.event_log
             .iter()
-            .map(|log| {
-                log.limit_state()
-                    .map(|l| l.in_flight())
-                    .unwrap_or_default()
-            })
+            .map(|log| log.limit_state().map(|l| l.in_flight()).unwrap_or_default())
             .max()
             .unwrap_or(0)
     }

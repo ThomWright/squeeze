@@ -1,8 +1,3 @@
-//! Delay-based limit which considers the difference in average response times between a short time
-//! window and a longer window.
-//!
-//! Changes in these values is considered an indicator of a change in load on the system.
-
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -18,6 +13,10 @@ use crate::{
 
 use super::LimitAlgorithm;
 
+/// Delay-based congestion detection which considers the difference in average response times
+/// between a short time window and a longer window.
+///
+/// Changes in these values is considered an indicator of a change in load on the system.
 pub struct GradientLimit {
     limit: AtomicUsize,
     min_limit: usize,
@@ -146,15 +145,15 @@ mod tests {
 
         let limiter = Limiter::new(gradient);
 
-        let mut timers = Vec::with_capacity(10);
+        let mut tokens = Vec::with_capacity(10);
 
         for _ in 0..10 {
-            let timer = limiter.try_acquire().unwrap();
-            timers.push(timer);
+            let token = limiter.try_acquire().unwrap();
+            tokens.push(token);
         }
-        for mut timer in timers {
-            timer.set_latency(Duration::from_millis(25));
-            limiter.release(timer, Some(Outcome::Success)).await;
+        for mut token in tokens {
+            token.set_latency(Duration::from_millis(25));
+            limiter.release(token, Some(Outcome::Success)).await;
         }
         assert_eq!(
             limiter.limit(),
@@ -162,15 +161,15 @@ mod tests {
             "steady latency + high concurrency: increase limit"
         );
 
-        let mut timers = Vec::with_capacity(10);
+        let mut tokens = Vec::with_capacity(10);
 
         for _ in 0..10 {
-            let mut timer = limiter.try_acquire().unwrap();
-            timer.set_latency(Duration::from_millis(250));
-            timers.push(timer);
+            let mut token = limiter.try_acquire().unwrap();
+            token.set_latency(Duration::from_millis(250));
+            tokens.push(token);
         }
-        for timer in timers {
-            limiter.release(timer, Some(Outcome::Success)).await;
+        for token in tokens {
+            limiter.release(token, Some(Outcome::Success)).await;
         }
         assert_eq!(limiter.limit(), 5, "increased latency: decrease limit");
     }
