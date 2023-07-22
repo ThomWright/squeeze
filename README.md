@@ -31,7 +31,7 @@ The congestion-based algorithms come in several flavours:
 - Loss-based – respond to failed jobs (overload)
 - Delay-based – respond to increases in latency (congestion)
 
-| Algorithm                           | Input | Response | Fairness                               |
+| Algorithm                           | Input | Response | TODO: Fairness                         |
 |-------------------------------------|-------|----------|----------------------------------------|
 | [AIMD](./src/limit/aimd.rs)         | Loss  | AIMD     | ? Can out-compete delay-based algos    |
 | [Gradient](./src/limit/gradient.rs) | Delay | AIMD     | ?                                      |
