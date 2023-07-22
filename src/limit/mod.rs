@@ -1,6 +1,7 @@
 //! Algorithms for controlling concurrency limits using congestion detection.
 
 mod aimd;
+mod fixed;
 mod gradient;
 mod vegas;
 
@@ -10,7 +11,9 @@ use std::time::Duration;
 use crate::Outcome;
 
 pub use aimd::AimdLimit;
+pub use fixed::FixedLimit;
 pub use gradient::GradientLimit;
+pub use vegas::VegasLimit;
 
 #[async_trait]
 pub trait LimitAlgorithm {
@@ -28,21 +31,4 @@ pub struct Sample {
     /// Jobs in flight when the sample was taken.
     pub(crate) in_flight: usize,
     pub(crate) outcome: Outcome,
-}
-
-/// A simple, fixed concurrency limit.
-pub struct FixedLimit(usize);
-impl FixedLimit {
-    pub fn limit(limit: usize) -> Self {
-        Self(limit)
-    }
-}
-#[async_trait]
-impl LimitAlgorithm for FixedLimit {
-    fn limit(&self) -> usize {
-        self.0
-    }
-    async fn update(&self, _reading: Sample) -> usize {
-        self.0
-    }
 }

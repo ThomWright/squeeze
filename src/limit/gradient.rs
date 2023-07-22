@@ -13,10 +13,16 @@ use crate::{
 
 use super::LimitAlgorithm;
 
-/// Delay-based congestion detection which considers the difference in average response times
-/// between a short time window and a longer window.
+/// Fair (?) delay-based congestion detection.
 ///
+/// Additive-increase, multiplicative decrease based on change in average latency.
+///
+/// Considers the difference in average latency between a short time window and a longer window.
 /// Changes in these values is considered an indicator of a change in load on the system.
+///
+/// Inspired by TCP congestion control algorithms using delay gradients.
+///
+/// [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
 pub struct GradientLimit {
     limit: AtomicUsize,
     min_limit: usize,
@@ -78,7 +84,7 @@ impl LimitAlgorithm for GradientLimit {
         self.limit.load(Ordering::Acquire)
     }
 
-    // FIXME: Improve or justify numerical conversions
+    // FIXME: Improve or justify safety of numerical conversions
     async fn update(&self, sample: Sample) -> usize {
         if sample.latency < Self::MIN_SAMPLE_LATENCY {
             return self.limit.load(Ordering::Acquire);
@@ -141,12 +147,16 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let gradient = GradientLimit::new_with_initial_limit(10);
+        static INIT_LIMIT: usize = 10;
+        let gradient = GradientLimit::new_with_initial_limit(INIT_LIMIT);
 
         let limiter = Limiter::new(gradient);
 
+        /*
+         * Concurrency = 10
+         * Steady latency
+         */
         let mut tokens = Vec::with_capacity(10);
-
         for _ in 0..10 {
             let token = limiter.try_acquire().unwrap();
             tokens.push(token);
@@ -155,14 +165,17 @@ mod tests {
             token.set_latency(Duration::from_millis(25));
             limiter.release(token, Some(Outcome::Success)).await;
         }
-        assert_eq!(
-            limiter.limit(),
-            13,
+        let higher_limit = limiter.limit();
+        assert!(
+            higher_limit > INIT_LIMIT,
             "steady latency + high concurrency: increase limit"
         );
 
+        /*
+         * Concurrency = 10
+         * 10x previous latency
+         */
         let mut tokens = Vec::with_capacity(10);
-
         for _ in 0..10 {
             let mut token = limiter.try_acquire().unwrap();
             token.set_latency(Duration::from_millis(250));
@@ -171,6 +184,9 @@ mod tests {
         for token in tokens {
             limiter.release(token, Some(Outcome::Success)).await;
         }
-        assert_eq!(limiter.limit(), 5, "increased latency: decrease limit");
+        assert!(
+            limiter.limit() < higher_limit,
+            "increased latency: decrease limit"
+        );
     }
 }

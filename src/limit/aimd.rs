@@ -6,8 +6,15 @@ use crate::{limit::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
-/// Loss-based congestion detection that does an additive increase when no load-based errors are
-/// observed and a multiplicative decrease when it detects an error.
+/// Loss-based congestion detection.
+///
+/// Additive-increase, multiplicative decrease.
+///
+/// Adds available currency when:
+/// 1. no load-based errors are observed, and
+/// 2. the utilisation of the current limit is high.
+///
+/// Reduces available concurrency by a factor when load-based errors are detected.
 pub struct AimdLimit {
     limit: AtomicUsize,
     min_limit: usize,
