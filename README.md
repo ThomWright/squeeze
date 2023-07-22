@@ -37,6 +37,12 @@ The congestion-based algorithms come in several flavours:
 | [Gradient](./src/limit/gradient.rs) | Delay | AIMD     | ?                                      |
 | [Vegas](./src/limit/vegas.rs)       | Delay | AIAD     | Fair alongside other delay-based algos |
 
+### Example
+
+The example below shows two applications using limiters on the client (output) and on the server (input), using different algorithms for each.
+
+![Example topology](docs/assets/example-topology.png)
+
 ### Caveats
 
 TODO:
