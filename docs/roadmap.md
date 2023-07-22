@@ -1,0 +1,32 @@
+# Roadmap
+
+- [ ] Limit algorithms
+  - [ ] Loss-based
+    - [x] AIMD
+  - [ ] Delay-based
+    - [x] Gradient
+      - [ ] Time-based short window (e.g. min. 1s, min. 10 samples)
+    - [ ] Vegas
+  - [ ] Combined loss- and delay-based
+- [ ] Tests
+  - [ ] Fairness
+- [ ] Simulator:
+  - [ ] Topology
+    - [ ] `Source` and `Sink` interfaces?
+    - [ ] `LoadSource -> Option<ClientLimiter> -> Option<ServerLimiter> -> Server`?
+    - [ ] `Server -> *Servers`?
+  - [ ] LoadSource - cycle through behaviours, e.g. 100 RPS for 10 seconds, 0 RPS for 2 seconds
+  - [ ] Results
+    - [ ] Each node keep track of own metrics?
+    - [ ] Graphs
+- [ ] Limiter
+  - [ ] Rejection delay
+    - Option to add delay before rejecting jobs. Intended to slow down clients, e.g. RabbitMQ retries.
+  - [ ] Static partitioning
+    - How possible would it be to partition somewhat dynamically? E.g. on customer IDs?
+  - [ ] LIFO
+    - Optimise for latency
+- [ ] Documentation
+  - [ ] README
+  - [ ] Rustdoc `#![warn(missing_docs)]`
+  - [ ] Move most docs into Rust doc format to view in e.g. crates.io
