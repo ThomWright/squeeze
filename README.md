@@ -6,7 +6,7 @@ Dynamic congestion-based concurrency limits for controlling backpressure.
 
 ## What is this?
 
-A Rust library to dynamically control concurrency limits. Several algorithms are included, mostly based on TCP congestion control. These detect signs of overload by observing and reacting to either load-based failures (loss) or latency (delay). Beyond the limit, additional requests to perform work can be rejected, and detected by upstream limiters as load-based failures. This can be an effective form of backpressure.
+A Rust library to dynamically control concurrency limits. Several algorithms are included, mostly based on TCP congestion control. These detect signs of overload by observing and reacting to either load-based failures (loss) or latency (delay). Beyond the limit, additional requests to perform work can be rejected. These rejections can be detected by upstream limiters as load-based failures, acting as an effective form of backpressure.
 
 In general, systems serving clients by doing jobs have a finite number of resources. For example, an HTTP server might have 4 CPU cores available. When these resources become heavily utilised, queues begin to form, and job latency increases. If these queues continue to grow, the system becomes effectively overloaded and unable to respond to job requests in a reasonable time.
 
