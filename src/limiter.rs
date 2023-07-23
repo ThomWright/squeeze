@@ -61,7 +61,10 @@ pub struct LimiterState {
 /// Errors not considered to be caused by overload should be ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
+    /// The job succeeded, or failed in a way unrelated to overload.
     Success,
+    /// The job failed because of overload, e.g. it timed out or an explicit backpressure signal
+    /// was observed.
     Overload,
 }
 
@@ -69,6 +72,7 @@ impl<T> Limiter<T>
 where
     T: LimitAlgorithm,
 {
+    /// Create a limiter with a given limit control algorithm.
     pub fn new(limit_algo: T) -> Self {
         let initial_permits = limit_algo.limit();
         assert!(initial_permits > 0);
@@ -249,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let limiter = Limiter::new(FixedLimit::limit(10));
+        let limiter = Limiter::new(FixedLimit::new(10));
 
         let token = limiter.try_acquire().unwrap();
 

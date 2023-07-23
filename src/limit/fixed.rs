@@ -5,7 +5,7 @@ use super::{LimitAlgorithm, Sample};
 /// A simple, fixed concurrency limit.
 pub struct FixedLimit(usize);
 impl FixedLimit {
-    pub fn limit(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         Self(limit)
     }
 }

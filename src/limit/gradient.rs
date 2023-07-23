@@ -43,7 +43,7 @@ impl GradientLimit {
     const DEFAULT_MAX_LIMIT: usize = 100;
 
     const DEFAULT_INCREASE: f64 = 4.;
-    const DEFAULT_INCREASE_MIN_USE: f64 = 0.5;
+    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.5;
     const DEFAULT_INCREASE_MIN_GRADIENT: f64 = 0.9;
 
     const DEFAULT_LONG_WINDOW_SAMPLES: u16 = 500;
@@ -84,8 +84,8 @@ impl LimitAlgorithm for GradientLimit {
         self.limit.load(Ordering::Acquire)
     }
 
-    // FIXME: Improve or justify safety of numerical conversions
     async fn update(&self, sample: Sample) -> usize {
+        // FIXME: Improve or justify safety of numerical conversions
         if sample.latency < Self::MIN_SAMPLE_LATENCY {
             return self.limit.load(Ordering::Acquire);
         }
@@ -112,11 +112,11 @@ impl LimitAlgorithm for GradientLimit {
         // Tolerate a given amount of latency difference.
         let gradient = (Self::DEFAULT_TOLERANCE * long_short_ratio).clamp(0.5, 1.0);
 
-        let in_use = sample.in_flight as f64 / old_limit;
+        let utilisation = sample.in_flight as f64 / old_limit;
 
         // Only apply an increase if we're using enough to justify it
         // and we're not trying to reduce the limit by much.
-        let increase = if in_use > Self::DEFAULT_INCREASE_MIN_USE
+        let increase = if utilisation > Self::DEFAULT_INCREASE_MIN_UTILISATION
             && gradient > Self::DEFAULT_INCREASE_MIN_GRADIENT
         {
             Self::DEFAULT_INCREASE

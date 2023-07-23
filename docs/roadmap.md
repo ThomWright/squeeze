@@ -1,13 +1,15 @@
 # Roadmap
 
 - [ ] Limit algorithms
-  - [ ] Loss-based
+  - [x] Loss-based
     - [x] AIMD
   - [ ] Delay-based
     - [x] Gradient
       - [ ] Time-based short window (e.g. min. 1s, min. 10 samples)
     - [ ] Vegas
-  - [ ] Combined loss- and delay-based
+  - [ ] Windowed wrapper
+    - [ ] Percentile sampler
+    - [ ] Average sampler
 - [ ] Tests
   - [ ] Fairness
 - [ ] Simulator:

@@ -31,11 +31,11 @@ The congestion-based algorithms come in several flavours:
 - Loss-based – respond to failed jobs (overload)
 - Delay-based – respond to increases in latency (congestion)
 
-| Algorithm                         | Feedback                    | Response | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                 |
-|-----------------------------------|-----------------------------|----------|----------------------------------------------------------------------------|
-| [AIMD](src/limit/aimd.rs)         | Loss (implicit or explicit) | AIMD     | Fair, but can out-compete delay-based algorithms                           |
-| [Gradient](src/limit/gradient.rs) | Delay (implicit)            | AIMD     | TODO: ?                                                                    |
-| [Vegas](src/limit/vegas.rs)       | Delay (implicit)            | AIAD     | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) |
+| Algorithm                         | Feedback                    | Response | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                                       |
+|-----------------------------------|-----------------------------|----------|--------------------------------------------------------------------------------------------------|
+| [AIMD](src/limit/aimd.rs)         | Loss (implicit or explicit) | AIMD     | Fair, but can out-compete delay-based algorithms                                                 |
+| [Gradient](src/limit/gradient.rs) | Delay (implicit)            | AIMD     | TODO: ?                                                                                          |
+| [Vegas](src/limit/vegas.rs)       | Delay (implicit)            | AIAD     | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) until overload (loss) |
 
 ### Example topology
 

@@ -15,16 +15,17 @@ pub use fixed::FixedLimit;
 pub use gradient::GradientLimit;
 pub use vegas::VegasLimit;
 
+/// An algorithm for controlling a concurrency limit.
 #[async_trait]
 pub trait LimitAlgorithm {
-    /// The current concurrency limit.
+    /// The current limit.
     fn limit(&self) -> usize;
 
     /// Update the concurrency limit in response to a new job completion.
     async fn update(&self, sample: Sample) -> usize;
 }
 
-/// The result of a job, including the [Outcome] (loss) and latency (delay).
+/// The result of a job (or jobs), including the [Outcome] (loss) and latency (delay).
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub(crate) latency: Duration,
