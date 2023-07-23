@@ -9,6 +9,7 @@ impl FixedLimit {
         Self(limit)
     }
 }
+
 #[async_trait]
 impl LimitAlgorithm for FixedLimit {
     fn limit(&self) -> usize {

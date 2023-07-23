@@ -1,4 +1,4 @@
-//! Algorithms for controlling concurrency limits using congestion detection.
+//! Algorithms for controlling concurrency limits.
 
 mod aimd;
 mod fixed;

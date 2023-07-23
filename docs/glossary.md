@@ -6,3 +6,5 @@
 - Congestion – a situation where multiple jobs are queueing to use a resource.
 - Downstream – a system receiving requests or messages.
 - Upstream – a system sending requests or messages.
+- AIMD – Additive Increase, Multiplicative Decrease
+- AIAD – Additive Increase, Additive Decrease

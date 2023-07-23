@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::{LimitAlgorithm, Sample};
 
-/// Fair delay-based congestion detection.
+/// Delay-based congestion avoidance.
 ///
 /// Additive increase, additive decrease. (?)
 ///
@@ -16,8 +16,8 @@ use super::{LimitAlgorithm, Sample};
 ///
 /// Inspired by TCP Vegas.
 ///
-/// [TCP Vegas: End to End Congestion Avoidance on a Global Internet]()
-/// [Understanding TCP Vegas: Theory and
+/// - [TCP Vegas: End to End Congestion Avoidance on a Global Internet](https://www.cs.princeton.edu/courses/archive/fall06/cos561/papers/vegas.pdf)
+/// - [Understanding TCP Vegas: Theory and
 /// Practice](https://www.cs.princeton.edu/research/techreps/TR-628-00)
 pub struct VegasLimit {
     limit: AtomicUsize,

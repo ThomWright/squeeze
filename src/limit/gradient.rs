@@ -13,7 +13,7 @@ use crate::{
 
 use super::LimitAlgorithm;
 
-/// Fair (?) delay-based congestion detection.
+/// Delay-based congestion avoidance.
 ///
 /// Additive-increase, multiplicative decrease based on change in average latency.
 ///
@@ -22,7 +22,7 @@ use super::LimitAlgorithm;
 ///
 /// Inspired by TCP congestion control algorithms using delay gradients.
 ///
-/// [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
+/// - [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
 pub struct GradientLimit {
     limit: AtomicUsize,
     min_limit: usize,

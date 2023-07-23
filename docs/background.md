@@ -127,9 +127,10 @@ Client -> API -> internal system -> database
   - Load balanced across multiple servers
     - Assume load balancers are working well
   - Prefer loss-based? Why?
-    - Easy to use rejected requests as a backpressure signal, especially for offline/batch applications.
+    - Can use rejected requests as a backpressure signal, especially for offline/batch applications.
 - Server-side
   - Prefer delay-based? Why?
+    - Can proactively shed load and protect themselves from becoming overloaded by detecting early signs of congestion.
 
 ## Per-operation limiting
 
