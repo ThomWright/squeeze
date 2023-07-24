@@ -4,17 +4,21 @@ use std::{
 };
 
 use async_trait::async_trait;
+use tokio::sync::Mutex;
+
+use crate::Outcome;
 
 use super::{LimitAlgorithm, Sample};
 
-/// Delay-based congestion avoidance.
+/// Loss- and delay-based congestion avoidance.
 ///
 /// Additive increase, additive decrease.
 ///
-/// Estimates queuing delay by comparing the current latency with the minimum observed latency.
+/// Estimates queuing delay by comparing the current latency with the minimum observed latency to
+/// estimate the number of jobs being queued.
 ///
-/// TODO: For more stability consider wrapping with a percentile window sampler. This calculates a
-/// percentile (e.g. P90) over a period of time and provides that as a sample. Vegas then compares
+/// TODO: For greater stability consider wrapping with a percentile window sampler. This calculates
+/// a percentile (e.g. P90) over a period of time and provides that as a sample. Vegas then compares
 /// recent P90 latency with the minimum observed P90. Used this way, Vegas can handle heterogeneous
 /// workloads, as long as the percentile latency is fairly stable.
 ///
@@ -29,33 +33,51 @@ use super::{LimitAlgorithm, Sample};
 /// - [Understanding TCP Vegas: Theory and
 /// Practice](https://www.cs.princeton.edu/research/techreps/TR-628-00)
 pub struct VegasLimit {
+    min_limit: usize,
+    max_limit: usize,
+
+    /// Lower queueing threshold, as a function of the current limit.
+    alpha: Box<dyn (Fn(usize) -> usize) + Send + Sync>,
+    /// Upper queueing threshold, as a function of the current limit.
+    beta: Box<dyn (Fn(usize) -> usize) + Send + Sync>,
+
     limit: AtomicUsize,
-    _min_limit: usize,
-    _max_limit: usize,
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
+    min_latency: Duration,
 }
 
 impl VegasLimit {
     const DEFAULT_MIN_LIMIT: usize = 1;
-    const DEFAULT_MAX_LIMIT: usize = 100;
+    const DEFAULT_MAX_LIMIT: usize = 1000;
 
-    const DEFAULT_INCREASE: usize = 1;
-    const DEFAULT_DECREASE: usize = 1;
-    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.5;
+    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
     const MIN_SAMPLE_LATENCY: Duration = Duration::from_micros(1);
 
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+        assert!(initial_limit > 0);
+
         Self {
             limit: AtomicUsize::new(initial_limit),
-            _min_limit: Self::DEFAULT_MIN_LIMIT,
-            _max_limit: Self::DEFAULT_MAX_LIMIT,
+            min_limit: Self::DEFAULT_MIN_LIMIT,
+            max_limit: Self::DEFAULT_MAX_LIMIT,
+
+            alpha: Box::new(|limit| 3 * limit.ilog10().max(1) as usize),
+            beta: Box::new(|limit| 6 * limit.ilog10().max(1) as usize),
+
+            inner: Mutex::new(Inner {
+                min_latency: Duration::ZERO,
+            }),
         }
     }
 
     pub fn with_max_limit(self, max: usize) -> Self {
         assert!(max > 0);
         Self {
-            _max_limit: max,
+            max_limit: max,
             ..self
         }
     }
@@ -67,39 +89,39 @@ impl LimitAlgorithm for VegasLimit {
         self.limit.load(Ordering::Acquire)
     }
 
-    /// Vegas algorithm:
+    /// Vegas algorithm, generally applied once every RTT:
     ///
     /// ```text
-    /// d    = estimated min. latency with no queueing
-    /// D(t) = observed latency for a job at time t
-    /// L(t) = concurrency limit at time t
-    /// F(t) = jobs in flight at time t
+    /// MIN_D = estimated min. latency with no queueing
+    /// D(t)  = observed latency for a job at time t
+    /// L(t)  = concurrency limit at time t
+    /// F(t)  = jobs in flight at time t
     ///
-    /// L(t) / d    = E = expected rate (no queueing)
-    /// L(t) / D(t) = A = actual rate
+    /// L(t) / MIN_D = E = expected rate (no queueing)
+    /// L(t) / D(t)  = A = actual rate
     ///
     /// E - A = DIFF [>= 0]
     ///
     /// alpha = low rate threshold: too little queueing
     /// beta  = high rate threshold: too much queueing
     ///
-    /// L(t+1) = L(t) + (1 / D(t)) if DIFF < alpha and F(t) > L(t) / 2
-    ///               - (1 / D(t)) if DIFF > beta
+    /// L(t+1) = L(t) + 1 if DIFF < alpha and F(t) > L(t) / 2
+    ///               - 1 if DIFF > beta
     /// ```
     ///
     /// Or, using queue size instead of rate:
     ///
     /// ```text
-    /// queue_size = L(t) * (1 − d / D(T)) [>= 0]
+    /// queue_size = L(t) * (1 − MIN_D / D(T)) [>= 0]
     ///
-    /// alpha = low queue threshold
-    /// beta  = high queue threshold
+    /// alpha = low queueing threshold
+    /// beta  = high queueing threshold
     ///
-    /// L(t+1) = L(t) + (1 / D(t)) if queue_size < alpha and F(t) > L(t) / 2
-    ///               - (1 / D(t)) if queue_size > beta
+    /// L(t+1) = L(t) + 1 if queue_size < alpha and F(t) > L(t) / 2
+    ///               - 1 if queue_size > beta
     /// ```
     ///
-    /// Example estimated queue sizes when `L(t)` = 10 and `d` = 10ms, for several changes in
+    /// Example estimated queue sizes when `L(t)` = 10 and `MIN_D` = 10ms, for several changes in
     /// latency:
     ///
     /// ```text
@@ -114,7 +136,48 @@ impl LimitAlgorithm for VegasLimit {
             return self.limit.load(Ordering::Acquire);
         }
 
-        // TODO: periodically reset min. latency measurement.
-        0
+        let mut inner = self.inner.lock().await;
+        if sample.latency < inner.min_latency {
+            inner.min_latency = sample.latency;
+            return self.limit.load(Ordering::Acquire);
+        }
+
+        let update_limit = |limit: usize| {
+            // TODO: periodically reset min. latency measurement.
+
+            let dt = sample.latency.as_secs_f64();
+            let min_d = inner.min_latency.as_secs_f64();
+
+            let estimated_queued_jobs = (limit as f64 * (1.0 - (min_d / dt))).ceil() as usize;
+
+            let utilisation = sample.in_flight as f64 / limit as f64;
+
+            let increment = limit.ilog10().max(1) as usize;
+
+            let limit =
+                // Limit too big
+                if sample.outcome == Outcome::Overload || estimated_queued_jobs < (self.alpha)(limit) {
+                    limit - increment
+
+                // Limit too small
+                } else if estimated_queued_jobs > (self.beta)(limit)
+                    && utilisation > Self::DEFAULT_INCREASE_MIN_UTILISATION
+                {
+                    // TODO: support some kind of fast start, e.g. increase by beta when almost no queueing
+                    limit + increment
+
+                // Perfect porridge
+                } else {
+                    limit
+                };
+
+            Some(limit.clamp(self.min_limit, self.max_limit))
+        };
+
+        self.limit
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, update_limit)
+            .expect("we always return Some(limit)");
+
+        self.limit.load(Ordering::SeqCst)
     }
 }

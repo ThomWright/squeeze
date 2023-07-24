@@ -16,27 +16,33 @@ use super::LimitAlgorithm;
 ///
 /// Reduces available concurrency by a factor when load-based errors are detected.
 pub struct AimdLimit {
-    limit: AtomicUsize,
     min_limit: usize,
     max_limit: usize,
-
     decrease_factor: f32,
     increase_by: usize,
+    min_utilisation_threshold: f64,
+
+    limit: AtomicUsize,
 }
 
 impl AimdLimit {
     const DEFAULT_DECREASE_FACTOR: f32 = 0.9;
     const DEFAULT_INCREASE: usize = 1;
     const DEFAULT_MIN_LIMIT: usize = 1;
-    const DEFAULT_MAX_LIMIT: usize = 100;
+    const DEFAULT_MAX_LIMIT: usize = 1000;
+    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+        assert!(initial_limit > 0);
+
         Self {
-            limit: AtomicUsize::new(initial_limit),
             min_limit: Self::DEFAULT_MIN_LIMIT,
             max_limit: Self::DEFAULT_MAX_LIMIT,
             decrease_factor: Self::DEFAULT_DECREASE_FACTOR,
             increase_by: Self::DEFAULT_INCREASE,
+            min_utilisation_threshold: Self::DEFAULT_INCREASE_MIN_UTILISATION,
+
+            limit: AtomicUsize::new(initial_limit),
         }
     }
 
@@ -63,6 +69,15 @@ impl AimdLimit {
             ..self
         }
     }
+
+    /// A threshold below which the limit won't be increased. 0.5 = 50%.
+    pub fn with_min_utilisation_threshold(self, min_util: f64) -> Self {
+        assert!(min_util > 0. && min_util < 1.);
+        Self {
+            min_utilisation_threshold: min_util,
+            ..self
+        }
+    }
 }
 
 #[async_trait]
@@ -77,8 +92,9 @@ impl LimitAlgorithm for AimdLimit {
             Success => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                        // Only increase the limit if we're using more than half of it.
-                        if sample.in_flight > limit / 2 {
+                        let utilisation = sample.in_flight as f64 / limit as f64;
+
+                        if utilisation > self.min_utilisation_threshold {
                             let limit = limit + self.increase_by;
                             Some(limit.clamp(self.min_limit, self.max_limit))
                         } else {
@@ -132,10 +148,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_increase_limit_on_success_when_using_gt_half_limit() {
+    async fn should_increase_limit_on_success_when_using_gt_util_threshold() {
         let aimd = AimdLimit::new_with_initial_limit(4)
             .decrease_factor(0.5)
-            .increase_by(1);
+            .increase_by(1)
+            .with_min_utilisation_threshold(0.5);
 
         let limiter = Limiter::new(aimd);
 
@@ -148,10 +165,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_not_change_limit_on_success_when_using_lt_half_limit() {
+    async fn should_not_change_limit_on_success_when_using_lt_util_threshold() {
         let aimd = AimdLimit::new_with_initial_limit(4)
             .decrease_factor(0.5)
-            .increase_by(1);
+            .increase_by(1)
+            .with_min_utilisation_threshold(0.5);
 
         let limiter = Limiter::new(aimd);
 

@@ -28,14 +28,14 @@ This library aims to:
 
 The congestion-based algorithms come in several flavours:
 
-- Loss-based – respond to failed jobs (overload)
-- Delay-based – respond to increases in latency (congestion)
+- Loss-based – respond to failed jobs (i.e. overload). Feedback can be implicit (e.g. a timeout) or explicit (e.g. an HTTP 429 or 503 status).
+- Delay-based – respond to increases in latency (i.e. congestion). Feedback is implicit.
 
-| Algorithm                         | Feedback                    | Response | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                                       |
-|-----------------------------------|-----------------------------|----------|--------------------------------------------------------------------------------------------------|
-| [AIMD](src/limit/aimd.rs)         | Loss (implicit or explicit) | AIMD     | Fair, but can out-compete delay-based algorithms                                                 |
-| [Gradient](src/limit/gradient.rs) | Delay (implicit)            | AIMD     | TODO: ?                                                                                          |
-| [Vegas](src/limit/vegas.rs)       | Delay (implicit)            | AIAD     | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) until overload (loss) |
+| Algorithm                         | Feedback       | Response | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                                       |
+|-----------------------------------|----------------|----------|--------------------------------------------------------------------------------------------------|
+| [AIMD](src/limit/aimd.rs)         | Loss           | AIMD     | Fair, but can out-compete delay-based algorithms                                                 |
+| [Gradient](src/limit/gradient.rs) | Delay          | AIMD     | TODO: ?                                                                                          |
+| [Vegas](src/limit/vegas.rs)       | Loss and delay | AIAD     | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) until overload (loss) |
 
 ### Example topology
 

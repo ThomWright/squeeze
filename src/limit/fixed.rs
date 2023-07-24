@@ -6,6 +6,8 @@ use super::{LimitAlgorithm, Sample};
 pub struct FixedLimit(usize);
 impl FixedLimit {
     pub fn new(limit: usize) -> Self {
+        assert!(limit > 0);
+
         Self(limit)
     }
 }

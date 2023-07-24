@@ -24,10 +24,10 @@ use super::LimitAlgorithm;
 ///
 /// - [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
 pub struct GradientLimit {
-    limit: AtomicUsize,
     min_limit: usize,
     max_limit: usize,
 
+    limit: AtomicUsize,
     inner: Mutex<Inner>,
 }
 
@@ -40,10 +40,10 @@ struct Inner {
 
 impl GradientLimit {
     const DEFAULT_MIN_LIMIT: usize = 1;
-    const DEFAULT_MAX_LIMIT: usize = 100;
+    const DEFAULT_MAX_LIMIT: usize = 1000;
 
     const DEFAULT_INCREASE: f64 = 4.;
-    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.5;
+    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
     const DEFAULT_INCREASE_MIN_GRADIENT: f64 = 0.9;
 
     const DEFAULT_LONG_WINDOW_SAMPLES: u16 = 500;
@@ -55,11 +55,13 @@ impl GradientLimit {
     const MIN_SAMPLE_LATENCY: Duration = Duration::from_micros(1);
 
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+        assert!(initial_limit > 0);
+
         Self {
-            limit: AtomicUsize::new(initial_limit),
             min_limit: Self::DEFAULT_MIN_LIMIT,
             max_limit: Self::DEFAULT_MAX_LIMIT,
 
+            limit: AtomicUsize::new(initial_limit),
             inner: Mutex::new(Inner {
                 long_window_latency: ExpSmoothed::window_size(Self::DEFAULT_LONG_WINDOW_SAMPLES),
                 short_window_latency: Simple::window_size(Self::DEFAULT_SHORT_WINDOW_SAMPLES),
