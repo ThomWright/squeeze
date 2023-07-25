@@ -12,7 +12,7 @@ use tokio::{
     time::{timeout, Instant},
 };
 
-use crate::limit::{LimitAlgorithm, Sample};
+use crate::limits::{LimitAlgorithm, Sample};
 
 /// Limits the number of concurrent jobs.
 ///
@@ -247,13 +247,23 @@ impl LimiterState {
     }
 }
 
+impl Outcome {
+    pub(crate) fn overloaded_or(self, other: Outcome) -> Outcome {
+        use Outcome::*;
+        match (self, other) {
+            (Success, Overload) => Overload,
+            _ => self,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{limit::FixedLimit, Limiter, Outcome};
+    use crate::{limits::Fixed, Limiter, Outcome};
 
     #[tokio::test]
     async fn it_works() {
-        let limiter = Limiter::new(FixedLimit::new(10));
+        let limiter = Limiter::new(Fixed::new(10));
 
         let token = limiter.try_acquire().unwrap();
 

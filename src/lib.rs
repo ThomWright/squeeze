@@ -1,7 +1,8 @@
 //! Dynamic congestion-based concurrency limits for controlling backpressure.
 
-pub mod limit;
+pub mod limits;
 mod limiter;
-mod mov_avg;
+mod mov_avgs;
+pub mod aggregators;
 
 pub use limiter::{Limiter, LimiterState, Outcome, Token};

@@ -10,7 +10,7 @@ use statrs::{
 use tokio::time::Instant;
 
 use squeeze::{
-    limit::{AimdLimit, LimitAlgorithm, Sample},
+    limits::{Aimd, LimitAlgorithm, Sample},
     Limiter, LimiterState, Outcome, Token,
 };
 
@@ -27,7 +27,7 @@ struct Simulation {
 type Id = usize;
 
 enum LimitWrapper {
-    Aimd(AimdLimit),
+    Aimd(Aimd),
 }
 #[async_trait]
 impl LimitAlgorithm for LimitWrapper {
@@ -162,7 +162,7 @@ mod event_log {
 
 impl Client {
     /// Create a client which sends `rps` requests per second on average.
-    fn new_with_rps(limiter: Option<Limiter<LimitWrapper>>, rps: f64) -> Self {
+    fn with_rps(limiter: Option<Limiter<LimitWrapper>>, rps: f64) -> Self {
         Self {
             limiter,
             interarrival: Exp::new(rps).unwrap(),
@@ -534,9 +534,9 @@ impl Summary {
 async fn test() {
     let simulation_duration = Duration::from_secs(1);
 
-    let client = Client::new_with_rps(
+    let client = Client::with_rps(
         Some(Limiter::new(LimitWrapper::Aimd(
-            AimdLimit::new_with_initial_limit(10)
+            Aimd::with_initial_limit(10)
                 .with_max_limit(20)
                 .decrease_factor(0.9)
                 .increase_by(1),

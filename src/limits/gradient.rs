@@ -1,17 +1,14 @@
-use std::{
-    sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::{
-    limit::Sample,
-    mov_avg::{ExpSmoothed, Simple},
+    limits::Sample,
+    mov_avgs::{ExpSmoothed, Simple},
 };
 
-use super::LimitAlgorithm;
+use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm};
 
 /// Delay-based congestion avoidance.
 ///
@@ -23,7 +20,7 @@ use super::LimitAlgorithm;
 /// Inspired by TCP congestion control algorithms using delay gradients.
 ///
 /// - [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
-pub struct GradientLimit {
+pub struct Gradient {
     min_limit: usize,
     max_limit: usize,
 
@@ -38,7 +35,7 @@ struct Inner {
     limit: f64,
 }
 
-impl GradientLimit {
+impl Gradient {
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
 
@@ -52,9 +49,7 @@ impl GradientLimit {
     const DEFAULT_TOLERANCE: f64 = 2.;
     const DEFAULT_SMOOTHING: f64 = 0.2;
 
-    const MIN_SAMPLE_LATENCY: Duration = Duration::from_micros(1);
-
-    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+    pub fn with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -81,14 +76,14 @@ impl GradientLimit {
 }
 
 #[async_trait]
-impl LimitAlgorithm for GradientLimit {
+impl LimitAlgorithm for Gradient {
     fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
 
     async fn update(&self, sample: Sample) -> usize {
         // FIXME: Improve or justify safety of numerical conversions
-        if sample.latency < Self::MIN_SAMPLE_LATENCY {
+        if sample.latency < MIN_SAMPLE_LATENCY {
             return self.limit.load(Ordering::Acquire);
         }
 
@@ -143,6 +138,8 @@ impl LimitAlgorithm for GradientLimit {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::{Limiter, Outcome};
 
     use super::*;
@@ -150,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         static INIT_LIMIT: usize = 10;
-        let gradient = GradientLimit::new_with_initial_limit(INIT_LIMIT);
+        let gradient = Gradient::with_initial_limit(INIT_LIMIT);
 
         let limiter = Limiter::new(gradient);
 

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::Outcome;
 
-use super::{LimitAlgorithm, Sample};
+use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
 /// Loss- and delay-based congestion avoidance.
 ///
@@ -17,7 +17,7 @@ use super::{LimitAlgorithm, Sample};
 /// Estimates queuing delay by comparing the current latency with the minimum observed latency to
 /// estimate the number of jobs being queued.
 ///
-/// TODO: For greater stability consider wrapping with a percentile window sampler. This calculates
+/// For greater stability consider wrapping with a percentile window sampler. This calculates
 /// a percentile (e.g. P90) over a period of time and provides that as a sample. Vegas then compares
 /// recent P90 latency with the minimum observed P90. Used this way, Vegas can handle heterogeneous
 /// workloads, as long as the percentile latency is fairly stable.
@@ -32,7 +32,7 @@ use super::{LimitAlgorithm, Sample};
 ///   Internet](https://www.cs.princeton.edu/courses/archive/fall06/cos561/papers/vegas.pdf)
 /// - [Understanding TCP Vegas: Theory and
 /// Practice](https://www.cs.princeton.edu/research/techreps/TR-628-00)
-pub struct VegasLimit {
+pub struct Vegas {
     min_limit: usize,
     max_limit: usize,
 
@@ -49,15 +49,13 @@ struct Inner {
     min_latency: Duration,
 }
 
-impl VegasLimit {
+impl Vegas {
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
 
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
-    const MIN_SAMPLE_LATENCY: Duration = Duration::from_micros(1);
-
-    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+    pub fn with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -69,7 +67,7 @@ impl VegasLimit {
             beta: Box::new(|limit| 6 * limit.ilog10().max(1) as usize),
 
             inner: Mutex::new(Inner {
-                min_latency: Duration::ZERO,
+                min_latency: Duration::MAX,
             }),
         }
     }
@@ -84,7 +82,7 @@ impl VegasLimit {
 }
 
 #[async_trait]
-impl LimitAlgorithm for VegasLimit {
+impl LimitAlgorithm for Vegas {
     fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
@@ -132,7 +130,7 @@ impl LimitAlgorithm for VegasLimit {
     /// 0.5x => queue_size = 10 * (1 - 0.01 / 0.005) = -10 (0%)
     /// ```
     async fn update(&self, sample: Sample) -> usize {
-        if sample.latency < Self::MIN_SAMPLE_LATENCY {
+        if sample.latency < MIN_SAMPLE_LATENCY {
             return self.limit.load(Ordering::Acquire);
         }
 

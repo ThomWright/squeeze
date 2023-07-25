@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
-use crate::{limit::Sample, Outcome};
+use crate::{limits::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
@@ -15,7 +15,7 @@ use super::LimitAlgorithm;
 /// 2. the utilisation of the current limit is high.
 ///
 /// Reduces available concurrency by a factor when load-based errors are detected.
-pub struct AimdLimit {
+pub struct Aimd {
     min_limit: usize,
     max_limit: usize,
     decrease_factor: f32,
@@ -25,14 +25,14 @@ pub struct AimdLimit {
     limit: AtomicUsize,
 }
 
-impl AimdLimit {
+impl Aimd {
     const DEFAULT_DECREASE_FACTOR: f32 = 0.9;
     const DEFAULT_INCREASE: usize = 1;
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
-    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
+    pub fn with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -81,7 +81,7 @@ impl AimdLimit {
 }
 
 #[async_trait]
-impl LimitAlgorithm for AimdLimit {
+impl LimitAlgorithm for Aimd {
     fn limit(&self) -> usize {
         self.limit.load(Ordering::Acquire)
     }
@@ -133,7 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_decrease_limit_on_overload() {
-        let aimd = AimdLimit::new_with_initial_limit(10)
+        let aimd = Aimd::with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
 
@@ -149,7 +149,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_increase_limit_on_success_when_using_gt_util_threshold() {
-        let aimd = AimdLimit::new_with_initial_limit(4)
+        let aimd = Aimd::with_initial_limit(4)
             .decrease_factor(0.5)
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
@@ -166,7 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_not_change_limit_on_success_when_using_lt_util_threshold() {
-        let aimd = AimdLimit::new_with_initial_limit(4)
+        let aimd = Aimd::with_initial_limit(4)
             .decrease_factor(0.5)
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
@@ -181,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_not_change_limit_when_no_outcome() {
-        let aimd = AimdLimit::new_with_initial_limit(10)
+        let aimd = Aimd::with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
 

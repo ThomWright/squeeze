@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use super::{LimitAlgorithm, Sample};
 
 /// A simple, fixed concurrency limit.
-pub struct FixedLimit(usize);
-impl FixedLimit {
+pub struct Fixed(usize);
+impl Fixed {
     pub fn new(limit: usize) -> Self {
         assert!(limit > 0);
 
@@ -13,7 +13,7 @@ impl FixedLimit {
 }
 
 #[async_trait]
-impl LimitAlgorithm for FixedLimit {
+impl LimitAlgorithm for Fixed {
     fn limit(&self) -> usize {
         self.0
     }

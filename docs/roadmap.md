@@ -3,15 +3,19 @@
 - [ ] Limit algorithms
   - [x] Loss-based
     - [x] AIMD
-  - [ ] Delay-based
+  - [x] Delay-based
     - [x] Gradient
       - [ ] Time-based short window (e.g. min. 1s, min. 10 samples)
-    - [ ] Vegas
-  - [ ] Windowed wrapper
-    - [ ] Percentile sampler
-    - [ ] Average sampler
+        - Or just move the short window to the Windowed wrapper?
+    - [x] Vegas
+      - [ ] Probe min. latency
+      - [ ] Support fast start
+  - [x] Windowed wrapper
+    - [x] Percentile sampler
+    - [x] Average sampler
+    - [ ] Configure window duration decision policy?
 - [ ] Tests
-  - [ ] Fairness
+  - [ ] Vegas
 - [ ] Simulator:
   - [ ] Topology
     - [ ] `Source` and `Sink` interfaces?
@@ -21,6 +25,7 @@
   - [ ] Results
     - [ ] Each node keep track of own metrics?
     - [ ] Graphs
+  - [ ] Test fairness
 - [ ] Limiter
   - [ ] Rejection delay
     - Option to add delay before rejecting jobs. Intended to slow down clients, e.g. RabbitMQ retries.
@@ -30,5 +35,7 @@
     - Optimise for latency
 - [ ] Documentation
   - [ ] README
+    - [ ] Examples
   - [ ] Rustdoc `#![warn(missing_docs)]`
+    - [ ] Examples
   - [ ] Move most docs into Rust doc format to view in e.g. crates.io
