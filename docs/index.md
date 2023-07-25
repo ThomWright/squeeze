@@ -4,3 +4,4 @@
 - [How tos](./how-tos.md)
 - [Roadmap](./roadmap.md)
 - [Supermarket analogy](./supermarket-analogy.md)
+- [Glossary](./glossary.md)

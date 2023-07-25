@@ -14,7 +14,7 @@ These systems can only process so many jobs concurrently. For a purely CPU-bound
 
 Concurrency limits can help protect a system from becoming overloaded, and these limits can be automatically set by observing and responding to the behaviour of the system.
 
-See the [documentation](./docs/background.md) for more details.
+See the [documentation](./docs/background.md) for more details, including more in depth [theory and background](./docs/background.md).
 
 ## Goals
 

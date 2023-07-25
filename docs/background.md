@@ -48,7 +48,7 @@ TODO:
   - Reacts to changes in both rate and latency, that is: more jobs, or more expensive jobs
 - This is the difference between:
   1. How many people should we let into the nightclub per minute?
-  2. How many people should we allow in the nightclub at once?
+  2. How many people should we allow into the nightclub at once?
 - Example:
   - Load tests revealed that at rates much higher than 100 RPS, the system starts to get overloaded.
   - Expected average latency = 100ms
