@@ -4,14 +4,17 @@ use std::time::Duration;
 
 use crate::{limits::Sample, Outcome};
 
-/// TODO:
+/// Aggregates multiple samples into one.
 pub trait Aggregator {
-    /// Returns the number of samples taken.
+    /// Add a sample to the aggregation.
+    ///
+    /// Returns the current aggregated sample.
     fn sample(&mut self, sample: Sample) -> Sample;
     fn sample_size(&self) -> usize;
     fn reset(&mut self);
 }
 
+/// Average latency.
 pub struct Average {
     latency_sum: Duration,
     max_in_flight: usize,
@@ -19,6 +22,7 @@ pub struct Average {
     samples: usize,
 }
 
+/// A latency percentile.
 pub struct Percentile {
     percentile: f64,
     max_in_flight: usize,
