@@ -34,9 +34,7 @@ pub struct Limiter<T> {
     notifier: Option<Arc<tokio::sync::Notify>>,
 }
 
-/// A concurrency token.
-///
-/// Jobs should only be run after acquiring a token.
+/// A concurrency token, required to run a job.
 ///
 /// Release the token back to the [Limiter] after the job is complete.
 #[derive(Debug)]

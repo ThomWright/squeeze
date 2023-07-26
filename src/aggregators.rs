@@ -1,13 +1,14 @@
-//! Aggregated samples.
+//! Sample aggregators.
 
 use std::time::Duration;
 
 use crate::{limits::Sample, Outcome};
 
-pub trait Sampler {
+/// TODO:
+pub trait Aggregator {
     /// Returns the number of samples taken.
     fn sample(&mut self, sample: Sample) -> Sample;
-    fn samples(&self) -> usize;
+    fn sample_size(&self) -> usize;
     fn reset(&mut self);
 }
 
@@ -25,7 +26,7 @@ pub struct Percentile {
     latencies: Vec<Duration>,
 }
 
-impl Sampler for Average {
+impl Aggregator for Average {
     fn sample(&mut self, sample: Sample) -> Sample {
         self.latency_sum += sample.latency;
         self.max_in_flight = self.max_in_flight.max(sample.in_flight);
@@ -38,7 +39,7 @@ impl Sampler for Average {
         }
     }
 
-    fn samples(&self) -> usize {
+    fn sample_size(&self) -> usize {
         self.samples
     }
 
@@ -71,7 +72,7 @@ impl Percentile {
     }
 }
 
-impl Sampler for Percentile {
+impl Aggregator for Percentile {
     fn sample(&mut self, sample: Sample) -> Sample {
         self.latencies.push(sample.latency);
         self.max_in_flight = self.max_in_flight.max(sample.in_flight);
@@ -85,7 +86,7 @@ impl Sampler for Percentile {
         }
     }
 
-    fn samples(&self) -> usize {
+    fn sample_size(&self) -> usize {
         self.latencies.len()
     }
 

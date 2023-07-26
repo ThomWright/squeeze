@@ -3,10 +3,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
-use crate::aggregators::Sampler;
+use crate::aggregators::Aggregator;
 
 use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
+/// A wrapper around a [LimitAlgorithm] which aggregates samples within a window, periodically
+/// updating the limit.
+///
+/// The window duration is dynamic, based on the latency of the previous aggregated sample.
+///
+/// Various [aggregators](crate::aggregators) are available to aggregate samples.
 pub struct Windowed<L, S> {
     min_window: Duration,
     max_window: Duration,
@@ -20,11 +26,12 @@ pub struct Windowed<L, S> {
 
 struct Window<S> {
     aggregator: S,
+
     start: Instant,
     duration: Duration,
 }
 
-impl<L: LimitAlgorithm, S: Sampler> Windowed<L, S> {
+impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
     pub fn new(inner: L, sampler: S) -> Self {
         let min_window = Duration::from_micros(1);
         Self {
@@ -43,17 +50,23 @@ impl<L: LimitAlgorithm, S: Sampler> Windowed<L, S> {
         }
     }
 
+    /// At least this many samples need to be aggregated before updating the limit.
     pub fn with_min_samples(mut self, samples: usize) -> Self {
         assert!(samples > 0, "at least one sample required per window");
         self.min_samples = samples;
         self
     }
 
+    /// Minimum time to wait before attempting to update the limit.
     pub fn with_min_window(mut self, min: Duration) -> Self {
         self.min_window = min;
         self
     }
 
+    /// Maximum time to wait before attempting to update the limit.
+    ///
+    /// Will wait for longer if not enough samples have been aggregated. See
+    /// [with_min_samples()](Self::with_min_samples()).
     pub fn with_max_window(mut self, max: Duration) -> Self {
         self.max_window = max;
         self
@@ -64,7 +77,7 @@ impl<L: LimitAlgorithm, S: Sampler> Windowed<L, S> {
 impl<L, S> LimitAlgorithm for Windowed<L, S>
 where
     L: LimitAlgorithm + Send + Sync,
-    S: Sampler + Send + Sync,
+    S: Aggregator + Send + Sync,
 {
     fn limit(&self) -> usize {
         self.inner.limit()
@@ -79,14 +92,14 @@ where
 
         let agg_sample = window.aggregator.sample(sample);
 
-        if window.aggregator.samples() >= self.min_samples
+        if window.aggregator.sample_size() >= self.min_samples
             && window.start.elapsed() >= window.duration
         {
             window.aggregator.reset();
 
             window.start = Instant::now();
 
-            // TODO: the Netflix lib uses min latency, make this configurable?
+            // TODO: the Netflix lib uses 2x min latency, make this configurable?
             window.duration = agg_sample.latency.clamp(self.min_window, self.max_window);
 
             self.inner.update(agg_sample).await
