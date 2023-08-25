@@ -88,7 +88,8 @@ Client -> API -> internal system -> database
 ## On congestion detection
 
 - TCP congestion control
-  - Delay-based (RTT in TCP, latency here) or loss-based (packet loss in TCP, errors caused by load here)
+  - Delay-based (RTT in TCP, latency here)
+  - Loss-based (packet loss in TCP, errors caused by load here)
 
 ## Delay-based vs loss-based
 
@@ -112,12 +113,15 @@ Client -> API -> internal system -> database
   - Pull – e.g. consumers pulling messages off a queue
 - For backpressure to work in a push-based system, upstream systems need to know when to stop sending traffic.
 - A couple of ways to implement this:
-  - Explicit: downstream systems sending extra data in responses about how loaded the system is which the upstream system can use as an indicator of load
-    - e.g. ECN in TCP
-    - Requires more coupling between services
+  - Explicit: downstream systems sending data to the client indicating it is congested or overloaded
     - "Please don't give me any more work, I'm very busy"
-  - Implicit: upstream systems can detect increased load or certain error responses e.g. HTTP 429 or gRPC RESOURCE_EXHAUSTED
+    - e.g. ECN in TCP, HTTP 429 or 503, gRPC RESOURCE_EXHAUSTED
+    - Requires more coupling between services
+  - Implicit: upstream systems inferring congestion or overload
     - "My colleague looks very overworked, perhaps I won't give them any more tasks to do"
+    - e.g. connection timeouts, refused connections, request timeouts, increasing latency
+    - Requires some guesswork, symptoms are not always caused by congestion
+      - E.g. connection timeouts can happen when firewalls drop packets
 
 ## Server-side vs client-side
 
@@ -132,6 +136,15 @@ Client -> API -> internal system -> database
   - Prefer delay-based? Why?
     - Can proactively shed load and protect themselves from becoming overloaded by detecting early signs of congestion.
 
+## Partitioning
+
+- Example: allocating 75% of capacity to client-serving traffic, 25% for batch jobs, but allowing either to use excess capacity.
+- Clients identified using e.g. headers (must be trusted)
+- Generally static
+  - How might dynamic partitioning work?
+    - Using unspecified set of values, e.g. by customer ID?
+    - Would probably want to keep the cardinality low, using a naturally limited identifier
+
 ## Per-operation limiting
 
 - Imagine a server with three operations:
@@ -140,9 +153,14 @@ Client -> API -> internal system -> database
   3. Write new resource
 - One per service is simple, and protects the whole service if it is overloaded. If all operations have similar latency characteristics it can work well. But a wide range of potential latencies could make it unpredictable when using a delay-based limiter.
 - Using separate limiters per operation could work more predictably, but they would need to fairly distribute the capacity between them. E.g. it would be bad if operation 1 could take all capacity and not leave enough for the others.
-- A fair delay-based limiter such as Vegas can work well here.
+- The algorithms are generally fair, so could work?
+- Alternatively, use a partitioned limiter?
 
 ## Limiters everywhere vs at the top
 
 - TODO: Need to think about this one
 - End-to-end principle, same as for retries
+- What about:
+  - Every server protects itself with a limiter
+  - Backpressure from servers is propagated upwards
+  - Client-side limiting is done at the top level?

@@ -51,6 +51,10 @@ TODO:
   - If configured to reduce concurrency for non-load-based errors, they can exacerbate availability problems when these errors occur.
 - Delay-based algorithms work more reliably with predictable latency.
   - For example, short bursts of increased latency from GC pauses could cause an outsized reduction in concurrency limits.
+  - Windowing can help with this.
+- Cold-start problem: capacity limits are not known at start up.
+  - There's a need to probe to discover this. Requests could be unnecessarily limited until the limit is increased to match capacity.
+  - Can be mitigated with single immediate retries (from a token bucket?), which might get load balanced to a server with available capacity.
 
 ## FAQ
 
@@ -77,6 +81,8 @@ TODO:
 - [TCP Congestion Control: A Systems Approach](https://tcpcc.systemsapproach.org/index.html)
 - [LWN -- Delay-gradient congestion control (CDG)](https://lwn.net/Articles/645115/)
 - [Strange Loop -- Stop Rate Limiting! Capacity Management Done Right](https://www.youtube.com/watch?v=m64SWl9bfvk)
+- [Marc Brooker -- Telling Stories About Little's Law](https://brooker.co.za/blog/2018/06/20/littles-law.html)
+- [Queuing theory: Definition, history & real-life applications & examples](https://queue-it.com/blog/queuing-theory/)
 
 ## License
 
