@@ -16,6 +16,34 @@ Concurrency limits can help protect a system from becoming overloaded, and these
 
 See [background](./docs/background.md) for more details.
 
+### Example
+
+```rust
+use std::sync::Arc;
+use squeeze::Limiter;
+
+// A limiter shared between request handler invocations.
+// This controls the concurrency of incoming requests.
+let limiter = Arc::new(Limiter::new(
+    Aimd::with_initial_limit(10)
+        .with_max_limit(20)
+        .decrease_factor(0.9)
+        .increase_by(1),
+));
+
+// A request handler
+tokio::spawn(async move {
+    // On request start
+    let token = limiter.try_acquire()
+      .expect("Do some proper error handling instead of this...");
+
+    // Do some work...
+
+    // On request finish
+    limiter.release(token, Some(Outcome::Success)).await;
+});
+```
+
 ## Goals
 
 This library aims to:
