@@ -10,14 +10,20 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 /// A wrapper around a [LimitAlgorithm] which aggregates samples within a window, periodically
 /// updating the limit.
 ///
-/// The window duration is dynamic, based on the latency of the previous aggregated sample.
+/// The window duration is dynamic, based on latencies seen in the previous window.
 ///
 /// Various [aggregators](crate::aggregators) are available to aggregate samples.
 pub struct Windowed<L, S> {
     min_window: Duration,
     max_window: Duration,
     min_samples: usize,
-    min_latency: Duration,
+
+    /// Samples below this threshold will be discarded and not contribute to the current window.
+    ///
+    /// Useful for discarding samples which are not representative of the system we're trying to
+    /// observe. For example, if an error occurs locally on the client machine, it doesn't tell us
+    /// anything about the state of the server we're trying to communicate with.
+    min_latency_threshold: Duration,
 
     inner: L,
 
@@ -25,10 +31,14 @@ pub struct Windowed<L, S> {
 }
 
 struct Window<S> {
-    aggregator: S,
-
     start: Instant,
     duration: Duration,
+
+    aggregator: S,
+    /// The minimum latency observed in the current window.
+    ///
+    /// Used to determine the next window duration.
+    min_latency: Duration,
 }
 
 impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
@@ -38,14 +48,16 @@ impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
             min_window,
             max_window: Duration::from_secs(1),
             min_samples: 10,
-            min_latency: MIN_SAMPLE_LATENCY,
+            min_latency_threshold: MIN_SAMPLE_LATENCY,
 
             inner,
 
             window: Mutex::new(Window {
-                aggregator: sampler,
                 duration: min_window,
                 start: Instant::now(),
+
+                aggregator: sampler,
+                min_latency: Duration::MAX,
             }),
         }
     }
@@ -84,23 +96,25 @@ where
     }
 
     async fn update(&self, sample: Sample) -> usize {
-        if sample.latency < self.min_latency {
+        if sample.latency < self.min_latency_threshold {
             return self.inner.limit();
         }
 
         let mut window = self.window.lock().await;
 
+        window.min_latency = window.min_latency.min(sample.latency);
         let agg_sample = window.aggregator.sample(sample);
 
         if window.aggregator.sample_size() >= self.min_samples
             && window.start.elapsed() >= window.duration
         {
+            window.min_latency = Duration::MAX;
             window.aggregator.reset();
 
             window.start = Instant::now();
 
-            // TODO: the Netflix lib uses 2x min latency, make this configurable?
-            window.duration = agg_sample.latency.clamp(self.min_window, self.max_window);
+            // Use a window duration of 2 * RTT (RTT ~= min latency).
+            window.duration = window.min_latency.clamp(self.min_window, self.max_window) * 2;
 
             self.inner.update(agg_sample).await
         } else {
