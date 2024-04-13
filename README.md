@@ -20,7 +20,7 @@ See [background](./docs/background.md) for more details.
 
 ```rust
 use std::sync::Arc;
-use squeeze::Limiter;
+use squeeze::{limits::Aimd, Limiter, Outcome};
 
 // A limiter shared between request handler invocations.
 // This controls the concurrency of incoming requests.
@@ -32,10 +32,11 @@ let limiter = Arc::new(Limiter::new(
 ));
 
 // A request handler
-tokio::spawn(async move {
+tokio_test::block_on(async move {
     // On request start
     let token = limiter.try_acquire()
-      .expect("Do some proper error handling instead of this...");
+        .await
+        .expect("Do some proper error handling instead of this...");
 
     // Do some work...
 
