@@ -30,6 +30,8 @@ pub struct Limiter<T> {
     /// Best-effort
     in_flight: Arc<AtomicUsize>,
 
+    rejection_delay: Option<Duration>,
+
     #[cfg(test)]
     notifier: Option<Arc<tokio::sync::Notify>>,
 }
@@ -80,9 +82,19 @@ where
             limit: AtomicUsize::new(initial_permits),
             in_flight: Arc::new(AtomicUsize::new(0)),
 
+            rejection_delay: None,
+
             #[cfg(test)]
             notifier: None,
         }
+    }
+
+    /// When rejecting a request, wait a while before returning the rejection.
+    ///
+    /// This can help reduce ...
+    pub fn with_rejection_delay(mut self, delay: Duration) -> Self {
+        self.rejection_delay = Some(delay);
+        self
     }
 
     /// In some cases [Token]s are acquired asynchronously when updating the limit.
@@ -95,13 +107,19 @@ where
     /// Try to immediately acquire a concurrency [Token].
     ///
     /// Returns `None` if there are none available.
-    pub fn try_acquire(&self) -> Option<Token<'_>> {
+    pub async fn try_acquire(&self) -> Option<Token<'_>> {
         match self.semaphore.try_acquire() {
             Ok(permit) => {
                 self.in_flight.fetch_add(1, Ordering::AcqRel);
                 Some(Token::new(permit, self.in_flight.clone()))
             }
-            Err(TryAcquireError::NoPermits) => None,
+            Err(TryAcquireError::NoPermits) => {
+                if let Some(delay) = self.rejection_delay {
+                    dbg!("try_acquire rejection delay", delay);
+                    tokio::time::sleep(delay).await;
+                }
+                None
+            }
             Err(TryAcquireError::Closed) => {
                 panic!("we own the semaphore, we shouldn't have closed it")
             }
@@ -114,7 +132,12 @@ where
     pub async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>> {
         match timeout(duration, self.semaphore.acquire()).await {
             Ok(Ok(permit)) => Some(Token::new(permit, self.in_flight.clone())),
-            Err(_) => None,
+            Err(_) => {
+                if let Some(delay) = self.rejection_delay {
+                    tokio::time::sleep(delay).await;
+                }
+                None
+            }
 
             Ok(Err(_)) => {
                 panic!("we own the semaphore, we shouldn't have closed it")
@@ -257,16 +280,66 @@ impl Outcome {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use crate::assert_elapsed;
     use crate::{limits::Fixed, Limiter, Outcome};
 
     #[tokio::test]
     async fn it_works() {
         let limiter = Limiter::new(Fixed::new(10));
 
-        let token = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().await.unwrap();
 
         limiter.release(token, Some(Outcome::Success)).await;
 
         assert_eq!(limiter.limit(), 10);
+    }
+
+    #[tokio::test]
+    async fn on_rejection_delay_acquire() {
+        let delay = Duration::from_millis(50);
+
+        let limiter = Limiter::new(Fixed::new(1)).with_rejection_delay(delay);
+
+        let _token = limiter.try_acquire().await.unwrap();
+
+        let now = Instant::now();
+        let token = limiter.try_acquire().await;
+
+        assert!(token.is_none());
+        assert_elapsed!(now, delay, Duration::from_millis(10));
+    }
+
+    #[tokio::test]
+    async fn on_rejection_delay_acquire_timeout() {
+        let delay = Duration::from_millis(50);
+
+        let limiter = Limiter::new(Fixed::new(1)).with_rejection_delay(delay);
+
+        let _token = limiter.try_acquire().await.unwrap();
+
+        let now = Instant::now();
+        let token = limiter.acquire_timeout(Duration::ZERO).await;
+
+        assert!(token.is_none());
+        assert_elapsed!(now, delay, Duration::from_millis(10));
+    }
+
+    #[macro_export]
+    #[cfg(test)]
+    macro_rules! assert_elapsed {
+        ($start:expr, $dur:expr, $tolerance:expr) => {{
+            let elapsed = $start.elapsed();
+            let lower: std::time::Duration = $dur;
+
+            // Handles ms rounding
+            assert!(
+                elapsed >= lower && elapsed <= lower + $tolerance,
+                "actual = {:?}, expected = {:?}",
+                elapsed,
+                lower
+            );
+        }};
     }
 }

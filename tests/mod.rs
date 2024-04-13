@@ -26,6 +26,7 @@ struct Simulation {
 
 type Id = usize;
 
+/// The limiting algorithms we'll be testing.
 enum LimitWrapper {
     Aimd(Aimd),
 }
@@ -175,19 +176,22 @@ impl Client {
     }
 
     /// Send a request.
-    fn send_req(&self) -> Result<Option<LimiterToken>, LimiterState> {
-        self.limiter
-            .as_ref()
-            .map(|limiter| {
-                limiter
-                    .try_acquire()
-                    .map(|token| LimiterToken {
+    async fn send_req(&self) -> Result<Option<LimiterToken>, LimiterState> {
+        let limiter = self.limiter.as_ref();
+
+        match limiter {
+            Some(limiter) => limiter
+                .try_acquire()
+                .await
+                .map(|token| {
+                    Some(LimiterToken {
                         token,
                         limit_state: limiter.state(),
                     })
-                    .ok_or(limiter.state())
-            })
-            .transpose()
+                })
+                .ok_or(limiter.state()),
+            None => Ok(None),
+        }
     }
 
     /// Receive a response.
@@ -226,24 +230,28 @@ impl Server {
     }
 
     /// Start processing a request.
-    fn recv_req(&self, rng: &mut SmallRng) -> Result<ServerResponse, LimiterState> {
+    async fn recv_req(&self, rng: &mut SmallRng) -> Result<ServerResponse, LimiterState> {
         let latency = Duration::from_secs_f64(self.latency.sample(rng));
-        self.limiter
-            .as_ref()
-            .map(|limiter| {
-                limiter
-                    .try_acquire()
-                    .map(|token| LimiterToken {
-                        token,
-                        limit_state: limiter.state(),
-                    })
-                    .ok_or(limiter.state())
-            })
-            .transpose()
-            .map(|limited| ServerResponse {
+        let limiter = self.limiter.as_ref();
+
+        match limiter {
+            Some(limiter) => limiter
+                .try_acquire()
+                .await
+                .map(|token| LimiterToken {
+                    token,
+                    limit_state: limiter.state(),
+                })
+                .ok_or(limiter.state())
+                .map(|limited| ServerResponse {
+                    latency,
+                    server_state: Some(limited),
+                }),
+            None => Ok(ServerResponse {
                 latency,
-                server_state: limited,
-            })
+                server_state: None,
+            }),
+        }
     }
 
     /// Return a response.
@@ -324,7 +332,7 @@ impl Simulation {
 
             match event.typ {
                 Action::StartRequest { client_id } => {
-                    let rejected = match self.client.send_req() {
+                    let rejected = match self.client.send_req().await {
                         Ok(client_state) => {
                             if let Some(ref s) = client_state {
                                 event_log.push(event_log::Item::Client(
@@ -333,7 +341,7 @@ impl Simulation {
                                 ));
                             }
 
-                            match self.server.recv_req(&mut rng) {
+                            match self.server.recv_req(&mut rng).await {
                                 Ok(res) => {
                                     if let Some(ref s) = res.server_state {
                                         event_log.push(event_log::Item::Server(

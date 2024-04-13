@@ -141,7 +141,7 @@ mod tests {
 
         let limiter = Limiter::new(aimd).with_release_notifier(release_notifier.clone());
 
-        let token = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().await.unwrap();
         limiter.release(token, Some(Outcome::Overload)).await;
         release_notifier.notified().await;
         assert_eq!(limiter.limit(), 5, "overload: decrease");
@@ -156,9 +156,9 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let token = limiter.try_acquire().unwrap();
-        let _token = limiter.try_acquire().unwrap();
-        let _token = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().await.unwrap();
+        let _token = limiter.try_acquire().await.unwrap();
+        let _token = limiter.try_acquire().await.unwrap();
 
         limiter.release(token, Some(Outcome::Success)).await;
         assert_eq!(limiter.limit(), 5, "success: increase");
@@ -173,7 +173,7 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let token = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().await.unwrap();
 
         limiter.release(token, Some(Outcome::Success)).await;
         assert_eq!(limiter.limit(), 4, "success: ignore when < half limit");
@@ -187,7 +187,7 @@ mod tests {
 
         let limiter = Limiter::new(aimd);
 
-        let token = limiter.try_acquire().unwrap();
+        let token = limiter.try_acquire().await.unwrap();
         limiter.release(token, None).await;
         assert_eq!(limiter.limit(), 10, "ignore");
     }
