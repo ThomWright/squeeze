@@ -17,8 +17,8 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 /// Estimates queuing delay by comparing the current latency with the minimum observed latency to
 /// estimate the number of jobs being queued.
 ///
-/// For greater stability consider wrapping with a percentile window sampler. This calculates
-/// a percentile (e.g. P90) over a period of time and provides that as a sample. Vegas then compares
+/// For greater stability consider wrapping with a percentile window sampler. This calculates a
+/// percentile (e.g. P90) over a period of time and provides that as a sample. Vegas then compares
 /// recent P90 latency with the minimum observed P90. Used this way, Vegas can handle heterogeneous
 /// workloads, as long as the percentile latency is fairly stable.
 ///
@@ -31,7 +31,10 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 /// - [TCP Vegas: End to End Congestion Avoidance on a Global
 ///   Internet](https://www.cs.princeton.edu/courses/archive/fall06/cos561/papers/vegas.pdf)
 /// - [Understanding TCP Vegas: Theory and
-/// Practice](https://www.cs.princeton.edu/research/techreps/TR-628-00)
+///   Practice](https://www.cs.princeton.edu/research/techreps/TR-628-00)
+/// - [A TCP Vegas Implementation for Linux](http://neal.nu/uw/linux-vegas/)
+/// - [Linux kernel
+///   implementation](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv4/tcp_vegas.c)
 pub struct Vegas {
     min_limit: usize,
     max_limit: usize,
@@ -53,7 +56,8 @@ impl Vegas {
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
 
-    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
+    /// When utilisation is above this and all else is good, increase the limit.
+    const DEFAULT_MAX_UTILISATION_BEFORE_INCREASE: f64 = 0.8;
 
     pub fn with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
@@ -159,7 +163,7 @@ impl LimitAlgorithm for Vegas {
 
                 // Limit too small
                 } else if estimated_queued_jobs > (self.beta)(limit)
-                    && utilisation > Self::DEFAULT_INCREASE_MIN_UTILISATION
+                    && utilisation > Self::DEFAULT_MAX_UTILISATION_BEFORE_INCREASE
                 {
                     // TODO: support some kind of fast start, e.g. increase by beta when almost no queueing
                     limit + increment

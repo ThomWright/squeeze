@@ -3,10 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::{
-    limits::Sample,
-    mov_avgs::{ExpSmoothed, Simple},
-};
+use crate::{limits::Sample, moving_avg};
 
 use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm};
 
@@ -16,6 +13,9 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm};
 ///
 /// Considers the difference in average latency between a short time window and a longer window.
 /// Changes in these values is considered an indicator of a change in load on the system.
+///
+/// Wrap with a [`crate::windowed::Windowed`] to control the short time window, otherwise the latest
+/// sample is used.
 ///
 /// Inspired by TCP congestion control algorithms using delay gradients.
 ///
@@ -29,9 +29,7 @@ pub struct Gradient {
 }
 
 struct Inner {
-    long_window_latency: ExpSmoothed,
-    short_window_latency: Simple,
-
+    long_window_latency: moving_avg::ExpSmoothed,
     limit: f64,
 }
 
@@ -44,7 +42,6 @@ impl Gradient {
     const DEFAULT_INCREASE_MIN_GRADIENT: f64 = 0.9;
 
     const DEFAULT_LONG_WINDOW_SAMPLES: u16 = 500;
-    const DEFAULT_SHORT_WINDOW_SAMPLES: u16 = 10;
 
     const DEFAULT_TOLERANCE: f64 = 2.;
     const DEFAULT_SMOOTHING: f64 = 0.2;
@@ -58,9 +55,9 @@ impl Gradient {
 
             limit: AtomicUsize::new(initial_limit),
             inner: Mutex::new(Inner {
-                long_window_latency: ExpSmoothed::window_size(Self::DEFAULT_LONG_WINDOW_SAMPLES),
-                short_window_latency: Simple::window_size(Self::DEFAULT_SHORT_WINDOW_SAMPLES),
-
+                long_window_latency: moving_avg::ExpSmoothed::new_with_window_size(
+                    Self::DEFAULT_LONG_WINDOW_SAMPLES,
+                ),
                 limit: initial_limit as f64,
             }),
         }
@@ -89,16 +86,13 @@ impl LimitAlgorithm for Gradient {
 
         let mut inner = self.inner.lock().await;
 
-        // Update short window
-        let short = inner.short_window_latency.sample(sample.latency);
-
         // Update long window
         let long = inner.long_window_latency.sample(sample.latency);
 
-        let long_short_ratio = long.as_secs_f64() / short.as_secs_f64();
+        let ratio = long.as_secs_f64() / sample.latency.as_secs_f64();
 
         // Speed up return to baseline after long period of increased load.
-        if long_short_ratio > 2.0 {
+        if ratio > 2.0 {
             inner.long_window_latency.set(long.mul_f64(0.95));
         }
 
@@ -107,7 +101,7 @@ impl LimitAlgorithm for Gradient {
         // Only apply downwards gradient (when latency has increased).
         // Limit to >= 0.5 to prevent aggressive load shedding.
         // Tolerate a given amount of latency difference.
-        let gradient = (Self::DEFAULT_TOLERANCE * long_short_ratio).clamp(0.5, 1.0);
+        let gradient = (Self::DEFAULT_TOLERANCE * ratio).clamp(0.5, 1.0);
 
         let utilisation = sample.in_flight as f64 / old_limit;
 

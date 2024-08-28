@@ -25,7 +25,7 @@ impl ExpSmoothed {
     /// > [Source](https://en.wikipedia.org/wiki/Exponential_smoothing#Choosing_the_initial_smoothed_value)
     const INITIAL_WARMUP_SAMPLES: u16 = 10;
 
-    pub fn window_size(k: u16) -> Self {
+    pub fn new_with_window_size(k: u16) -> Self {
         Self {
             smoothing_factor: Self::smoothing_for_window(k),
             value: Duration::ZERO,
@@ -67,7 +67,7 @@ pub struct Simple {
 }
 
 impl Simple {
-    pub fn window_size(window_size: u16) -> Self {
+    pub fn new_with_window_size(window_size: u16) -> Self {
         assert!(window_size > 0, "window size must be > 0");
         Self {
             window_size,

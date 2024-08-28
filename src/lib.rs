@@ -7,9 +7,9 @@ use doc_comment::doctest;
 #[cfg(doctest)]
 doctest!("../README.md");
 
-pub mod aggregators;
+pub mod aggregation;
 mod limiter;
 pub mod limits;
-mod mov_avgs;
+mod moving_avg;
 
 pub use limiter::{Limiter, LimiterState, Outcome, Token};

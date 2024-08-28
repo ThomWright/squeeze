@@ -5,6 +5,9 @@ use std::time::Duration;
 use crate::{limits::Sample, Outcome};
 
 /// Aggregates multiple samples into one.
+///
+/// Additional samples can be added to update the aggregated sample. As such, the sample window can
+/// be expanded, but only contracted again by resetting.
 pub trait Aggregator {
     /// Add a sample to the aggregation.
     ///

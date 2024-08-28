@@ -5,8 +5,9 @@
     - [x] AIMD
   - [x] Delay-based
     - [x] Gradient
-      - [ ] Time-based short window (e.g. min. 1s, min. 10 samples)
-        - Or just move the short window to the Windowed wrapper?
+      - [x] Time-based short window (e.g. min. 1s, min. 10 samples)
+            _This way the limit won't be updated on every sample_
+        - Just move the short window to the Windowed wrapper!
     - [x] Vegas
       - [ ] Probe min. latency
       - [ ] Support fast start

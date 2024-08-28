@@ -1,9 +1,9 @@
-use std::time::Duration;
+use std::{ops::RangeInclusive, time::Duration};
 
 use async_trait::async_trait;
 use tokio::{sync::Mutex, time::Instant};
 
-use crate::aggregators::Aggregator;
+use crate::aggregation::Aggregator;
 
 use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
@@ -14,8 +14,7 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 ///
 /// Various [aggregators](crate::aggregators) are available to aggregate samples.
 pub struct Windowed<L, S> {
-    min_window: Duration,
-    max_window: Duration,
+    window_bounds: RangeInclusive<Duration>,
     min_samples: usize,
 
     /// Samples below this threshold will be discarded and not contribute to the current window.
@@ -42,12 +41,13 @@ struct Window<S> {
 }
 
 impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
+    const DEFAULT_MIN_SAMPLES: usize = 10;
+
     pub fn new(inner: L, sampler: S) -> Self {
         let min_window = Duration::from_micros(1);
         Self {
-            min_window,
-            max_window: Duration::from_secs(1),
-            min_samples: 10,
+            window_bounds: RangeInclusive::new(min_window, Duration::from_secs(1)),
+            min_samples: Self::DEFAULT_MIN_SAMPLES,
             min_latency_threshold: MIN_SAMPLE_LATENCY,
 
             inner,
@@ -71,7 +71,7 @@ impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
 
     /// Minimum time to wait before attempting to update the limit.
     pub fn with_min_window(mut self, min: Duration) -> Self {
-        self.min_window = min;
+        self.window_bounds = min..=*self.window_bounds.end();
         self
     }
 
@@ -80,7 +80,7 @@ impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
     /// Will wait for longer if not enough samples have been aggregated. See
     /// [with_min_samples()](Self::with_min_samples()).
     pub fn with_max_window(mut self, max: Duration) -> Self {
-        self.max_window = max;
+        self.window_bounds = *self.window_bounds.start()..=max;
         self
     }
 }
@@ -103,18 +103,13 @@ where
         let mut window = self.window.lock().await;
 
         window.min_latency = window.min_latency.min(sample.latency);
+
         let agg_sample = window.aggregator.sample(sample);
 
         if window.aggregator.sample_size() >= self.min_samples
             && window.start.elapsed() >= window.duration
         {
-            window.min_latency = Duration::MAX;
-            window.aggregator.reset();
-
-            window.start = Instant::now();
-
-            // Use a window duration of 2 * RTT (RTT ~= min latency).
-            window.duration = window.min_latency.clamp(self.min_window, self.max_window) * 2;
+            window.reset(&self.window_bounds);
 
             self.inner.update(agg_sample).await
         } else {
@@ -123,9 +118,24 @@ where
     }
 }
 
+impl<S> Window<S>
+where
+    S: Aggregator,
+{
+    fn reset(&mut self, bounds: &RangeInclusive<Duration>) {
+        self.min_latency = Duration::MAX;
+        self.aggregator.reset();
+
+        self.start = Instant::now();
+
+        // Use a window duration of 2 * RTT (RTT ~= min latency).
+        self.duration = self.min_latency.clamp(*bounds.start(), *bounds.end()) * 2;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{aggregators::Average, limits::Vegas, Outcome};
+    use crate::{aggregation::Average, limits::Vegas, Outcome};
 
     use super::*;
 
