@@ -1,6 +1,6 @@
 //! Sample aggregators.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use crate::{limits::Sample, Outcome};
 
@@ -17,30 +17,30 @@ pub trait Aggregator {
     fn reset(&mut self);
 }
 
-/// Average latency.
+/// Average latency and concurrency (in flight).
 pub struct Average {
     latency_sum: Duration,
-    max_in_flight: usize,
+    in_flight_sum: u128,
     overload: Outcome,
     samples: usize,
 }
 
-/// A latency percentile.
+/// A latency percentile, with sample-matched concurrency (in flight).
 pub struct Percentile {
     percentile: f64,
-    max_in_flight: usize,
     overload: Outcome,
-    latencies: Vec<Duration>,
+    samples: BTreeMap<Duration, Sample>,
 }
 
 impl Aggregator for Average {
     fn sample(&mut self, sample: Sample) -> Sample {
+        // TODO: review precision conversions
         self.latency_sum += sample.latency;
-        self.max_in_flight = self.max_in_flight.max(sample.in_flight);
+        self.in_flight_sum += sample.in_flight as u128;
         self.overload = self.overload.overloaded_or(sample.outcome);
         self.samples += 1;
         Sample {
-            in_flight: self.max_in_flight,
+            in_flight: (self.in_flight_sum / self.samples as u128) as usize,
             latency: self.latency_sum.div_f64(self.samples as f64),
             outcome: self.overload,
         }
@@ -59,7 +59,7 @@ impl Default for Average {
     fn default() -> Self {
         Self {
             latency_sum: Duration::ZERO,
-            max_in_flight: 0,
+            in_flight_sum: 0,
             overload: Outcome::Success,
             samples: 0,
         }
@@ -81,20 +81,31 @@ impl Percentile {
 
 impl Aggregator for Percentile {
     fn sample(&mut self, sample: Sample) -> Sample {
-        self.latencies.push(sample.latency);
-        self.max_in_flight = self.max_in_flight.max(sample.in_flight);
         self.overload = self.overload.overloaded_or(sample.outcome);
+        self.samples.insert(sample.latency, sample);
 
-        let index = (self.latencies.len() as f64 * self.percentile).ceil() as usize;
+        let index = (self.samples.len() as f64 * self.percentile).ceil() as usize;
+
+        let (latency, perc_sample) = self
+            .samples
+            .iter()
+            .nth(index - 1)
+            .expect("index should exist");
+
         Sample {
-            in_flight: self.max_in_flight,
-            latency: *self.latencies.get(index - 1).expect("index should exist"),
+            // TODO: what is best to do with the concurrency (in flight)?
+            //
+            // - max?
+            // - percentile?
+            // - match the sample of the latency percentile? <- Doing this one for now
+            in_flight: perc_sample.in_flight,
+            latency: *latency,
             outcome: self.overload,
         }
     }
 
     fn sample_size(&self) -> usize {
-        self.latencies.len()
+        self.samples.len()
     }
 
     fn reset(&mut self) {
@@ -109,8 +120,7 @@ impl Default for Percentile {
     fn default() -> Self {
         Self {
             percentile: 0.5,
-            latencies: Vec::new(),
-            max_in_flight: 0,
+            samples: BTreeMap::new(),
             overload: Outcome::Success,
         }
     }
@@ -145,7 +155,7 @@ mod tests {
         assert_eq!(
             sample,
             Sample {
-                in_flight: 5,
+                in_flight: 3,
                 latency: Duration::from_millis(3),
                 outcome: Outcome::Overload,
             }
@@ -186,15 +196,15 @@ mod tests {
         let mut aggregator = Percentile::new(0.01);
 
         aggregator.sample(Sample {
-            in_flight: 1,
-            latency: Duration::from_millis(1),
-            outcome: Outcome::Success,
-        });
-
-        aggregator.sample(Sample {
             in_flight: 5,
             latency: Duration::from_millis(3),
             outcome: Outcome::Overload,
+        });
+
+        aggregator.sample(Sample {
+            in_flight: 1,
+            latency: Duration::from_millis(1),
+            outcome: Outcome::Success,
         });
 
         let sample = aggregator.sample(Sample {
@@ -206,7 +216,7 @@ mod tests {
         assert_eq!(
             sample,
             Sample {
-                in_flight: 5,
+                in_flight: 1,
                 latency: Duration::from_millis(1),
                 outcome: Outcome::Overload,
             }
@@ -218,15 +228,15 @@ mod tests {
         let mut aggregator = Percentile::new(0.99);
 
         aggregator.sample(Sample {
-            in_flight: 1,
-            latency: Duration::from_millis(1),
-            outcome: Outcome::Success,
-        });
-
-        aggregator.sample(Sample {
             in_flight: 5,
             latency: Duration::from_millis(3),
             outcome: Outcome::Overload,
+        });
+
+        aggregator.sample(Sample {
+            in_flight: 1,
+            latency: Duration::from_millis(1),
+            outcome: Outcome::Success,
         });
 
         let sample = aggregator.sample(Sample {
@@ -238,7 +248,7 @@ mod tests {
         assert_eq!(
             sample,
             Sample {
-                in_flight: 5,
+                in_flight: 3,
                 latency: Duration::from_millis(5),
                 outcome: Outcome::Overload,
             }
