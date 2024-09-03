@@ -144,7 +144,7 @@ mod tests {
         let samples = 2;
 
         // Just test with a min sample size for now
-        let windowed_vegas = Windowed::new(Vegas::with_initial_limit(10), Average::default())
+        let windowed_vegas = Windowed::new(Vegas::new_with_initial_limit(10), Average::default())
             .with_min_samples(samples)
             .with_min_window(Duration::ZERO)
             .with_max_window(Duration::ZERO);

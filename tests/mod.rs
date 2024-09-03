@@ -544,7 +544,7 @@ async fn test() {
 
     let client = Client::with_rps(
         Some(Limiter::new(LimitWrapper::Aimd(
-            Aimd::with_initial_limit(10)
+            Aimd::new_with_initial_limit(10)
                 .with_max_limit(20)
                 .decrease_factor(0.9)
                 .increase_by(1),

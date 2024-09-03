@@ -8,11 +8,11 @@ use tokio::sync::Mutex;
 
 use crate::Outcome;
 
-use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
+use super::{aimd::multiplicative_decrease, defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
 /// Loss- and delay-based congestion avoidance.
 ///
-/// Additive increase, additive decrease.
+/// Additive increase, additive decrease. Multiplicative decrease when overload detected.
 ///
 /// Estimates queuing delay by comparing the current latency with the minimum observed latency to
 /// estimate the number of jobs being queued.
@@ -40,26 +40,35 @@ pub struct Vegas {
     max_limit: usize,
 
     /// Lower queueing threshold, as a function of the current limit.
-    alpha: Box<dyn (Fn(usize) -> usize) + Send + Sync>,
+    alpha: Box<dyn (Fn(usize) -> f64) + Send + Sync>,
     /// Upper queueing threshold, as a function of the current limit.
-    beta: Box<dyn (Fn(usize) -> usize) + Send + Sync>,
+    beta: Box<dyn (Fn(usize) -> f64) + Send + Sync>,
 
     limit: AtomicUsize,
     inner: Mutex<Inner>,
 }
 
 struct Inner {
-    min_latency: Duration,
+    /// The minimum observed latency, used as a baseline.
+    ///
+    /// This is the latency we would expect to see if there is no congestion.
+    base_latency: Duration,
 }
 
 impl Vegas {
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
 
-    /// When utilisation is above this and all else is good, increase the limit.
-    const DEFAULT_MAX_UTILISATION_BEFORE_INCREASE: f64 = 0.8;
+    const DEFAULT_ALPHA_MULTIPLIER: f64 = 3_f64;
+    const DEFAULT_BETA_MULTIPLIER: f64 = 6_f64;
 
-    pub fn with_initial_limit(initial_limit: usize) -> Self {
+    /// Used when we see overload occurring.
+    const DEFAULT_DECREASE_FACTOR: f64 = 0.9;
+
+    /// Utilisation needs to be above this to increase the limit.
+    const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
+
+    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -67,11 +76,15 @@ impl Vegas {
             min_limit: Self::DEFAULT_MIN_LIMIT,
             max_limit: Self::DEFAULT_MAX_LIMIT,
 
-            alpha: Box::new(|limit| 3 * limit.ilog10().max(1) as usize),
-            beta: Box::new(|limit| 6 * limit.ilog10().max(1) as usize),
+            alpha: Box::new(|limit| {
+                Self::DEFAULT_ALPHA_MULTIPLIER * (limit as f64).log10().max(1_f64)
+            }),
+            beta: Box::new(|limit| {
+                Self::DEFAULT_BETA_MULTIPLIER * (limit as f64).log10().max(1_f64)
+            }),
 
             inner: Mutex::new(Inner {
-                min_latency: Duration::MAX,
+                base_latency: Duration::MAX,
             }),
         }
     }
@@ -91,47 +104,43 @@ impl LimitAlgorithm for Vegas {
         self.limit.load(Ordering::Acquire)
     }
 
-    /// Vegas algorithm, generally applied once every RTT:
+    /// Vegas algorithm.
+    ///
+    /// Generally applied over a window size of one or two RTTs.
+    ///
+    /// Little's law: `L = λW = concurrency = rate * latency` (averages).
+    ///
+    /// The algorithm in terms of rates:
     ///
     /// ```text
-    /// MIN_D = estimated min. latency with no queueing
-    /// D(t)  = observed latency for a job at time t
-    /// L(t)  = concurrency limit at time t
-    /// F(t)  = jobs in flight at time t
+    /// BASE_D = estimated base latency with no queueing
+    /// D(w)   = observed average latency per job over window w
+    /// L(w)   = concurrency limit for window w
+    /// F(w)   = average jobs in flight during window w
     ///
-    /// L(t) / MIN_D = E = expected rate (no queueing)
-    /// L(t) / D(t)  = A = actual rate
+    /// L(w) / BASE_D = E    = expected rate (no queueing)
+    /// F(w) / D(w)   = A(w) = actual rate during window w
     ///
-    /// E - A = DIFF [>= 0]
+    /// E - A(w) = DIFF [>= 0]
     ///
     /// alpha = low rate threshold: too little queueing
     /// beta  = high rate threshold: too much queueing
     ///
-    /// L(t+1) = L(t) + 1 if DIFF < alpha and F(t) > L(t) / 2
+    /// L(w+1) = L(w) + 1 if DIFF < alpha
     ///               - 1 if DIFF > beta
     /// ```
     ///
     /// Or, using queue size instead of rate:
     ///
     /// ```text
-    /// queue_size = L(t) * (1 − MIN_D / D(T)) [>= 0]
+    /// D(w) - BASE_D = ΔD(w) = extra average latency in window w caused by queueing
+    /// A(w) * ΔD(w)  = Q(w)  = estimated average queue size in window w
     ///
     /// alpha = low queueing threshold
     /// beta  = high queueing threshold
     ///
-    /// L(t+1) = L(t) + 1 if queue_size < alpha and F(t) > L(t) / 2
-    ///               - 1 if queue_size > beta
-    /// ```
-    ///
-    /// Example estimated queue sizes when `L(t)` = 10 and `MIN_D` = 10ms, for several changes in
-    /// latency:
-    ///
-    /// ```text
-    ///  10x => queue_size = 10 * (1 - 0.01 / 0.1)   =   9 (90%)
-    ///   2x => queue_size = 10 * (1 - 0.01 / 0.02)  =   5 (50%)
-    /// 1.5x => queue_size = 10 * (1 - 0.01 / 0.015) =   3 (30%)
-    ///   1x => queue_size = 10 * (1 - 0.01 / 0.01)  =   0 (0%)
-    /// 0.5x => queue_size = 10 * (1 - 0.01 / 0.005) = -10 (0%)
+    /// L(w+1) = L(w) + 1 if Q(w) < alpha
+    ///               - 1 if Q(w) > beta
     /// ```
     async fn update(&self, sample: Sample) -> usize {
         if sample.latency < MIN_SAMPLE_LATENCY {
@@ -139,39 +148,43 @@ impl LimitAlgorithm for Vegas {
         }
 
         let mut inner = self.inner.lock().await;
-        if sample.latency < inner.min_latency {
-            inner.min_latency = sample.latency;
+
+        if sample.latency < inner.base_latency {
+            // Record a baseline "no load" latency and keep the limit.
+            inner.base_latency = sample.latency;
             return self.limit.load(Ordering::Acquire);
         }
 
         let update_limit = |limit: usize| {
-            // TODO: periodically reset min. latency measurement.
+            // TODO: periodically reset baseline latency measurement.
 
-            let dt = sample.latency.as_secs_f64();
-            let min_d = inner.min_latency.as_secs_f64();
+            let actual_rate = sample.in_flight as f64 / sample.latency.as_secs_f64();
 
-            let estimated_queued_jobs = (limit as f64 * (1.0 - (min_d / dt))).ceil() as usize;
+            let extra_latency = sample.latency.as_secs_f64() - inner.base_latency.as_secs_f64();
+
+            let estimated_queued_jobs = actual_rate * extra_latency;
 
             let utilisation = sample.in_flight as f64 / limit as f64;
 
             let increment = limit.ilog10().max(1) as usize;
 
-            let limit =
-                // Limit too big
-                if sample.outcome == Outcome::Overload || estimated_queued_jobs < (self.alpha)(limit) {
-                    limit - increment
+            let limit = if sample.outcome == Outcome::Overload {
+                // Limit too big – overload
+                multiplicative_decrease(limit, Self::DEFAULT_DECREASE_FACTOR)
+            } else if estimated_queued_jobs > (self.beta)(limit) {
+                // Limit too big – too much queueing
+                limit - increment
+            } else if estimated_queued_jobs < (self.alpha)(limit)
+                && utilisation >= Self::DEFAULT_INCREASE_MIN_UTILISATION
+            {
+                // Limit too small – low queueing + high utilisation
 
-                // Limit too small
-                } else if estimated_queued_jobs > (self.beta)(limit)
-                    && utilisation > Self::DEFAULT_MAX_UTILISATION_BEFORE_INCREASE
-                {
-                    // TODO: support some kind of fast start, e.g. increase by beta when almost no queueing
-                    limit + increment
-
+                // TODO: support some kind of fast start, e.g. increase by beta when almost no queueing
+                limit + increment
+            } else {
                 // Perfect porridge
-                } else {
-                    limit
-                };
+                limit
+            };
 
             Some(limit.clamp(self.min_limit, self.max_limit))
         };
@@ -181,5 +194,145 @@ impl LimitAlgorithm for Vegas {
             .expect("we always return Some(limit)");
 
         self.limit.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::{Limiter, Outcome};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn it_works() {
+        static INIT_LIMIT: usize = 10;
+        let gradient = Vegas::new_with_initial_limit(INIT_LIMIT);
+
+        let limiter = Limiter::new(gradient);
+
+        /*
+         * Warm up
+         *
+         * Concurrency = 5
+         * Steady latency
+         */
+        let mut tokens = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let token = limiter.try_acquire().await.unwrap();
+            tokens.push(token);
+        }
+        for mut token in tokens {
+            token.set_latency(Duration::from_millis(25));
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+
+        /*
+         * Concurrency = 9
+         * Steady latency
+         */
+        let mut tokens = Vec::with_capacity(9);
+        for _ in 0..9 {
+            let token = limiter.try_acquire().await.unwrap();
+            tokens.push(token);
+        }
+        for mut token in tokens {
+            token.set_latency(Duration::from_millis(25));
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+        let higher_limit = limiter.limit();
+        assert!(
+            higher_limit > INIT_LIMIT,
+            "steady latency + high concurrency: increase limit"
+        );
+
+        /*
+         * Concurrency = 10
+         * 10x previous latency
+         */
+        let mut tokens = Vec::with_capacity(10);
+        for _ in 0..10 {
+            let mut token = limiter.try_acquire().await.unwrap();
+            token.set_latency(Duration::from_millis(250));
+            tokens.push(token);
+        }
+        for token in tokens {
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+        assert!(
+            limiter.limit() < higher_limit,
+            "increased latency: decrease limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn windowed() {
+        use crate::aggregation::Percentile;
+        use crate::limits::Windowed;
+
+        static INIT_LIMIT: usize = 10;
+        let gradient = Windowed::new(
+            Vegas::new_with_initial_limit(INIT_LIMIT),
+            Percentile::default(),
+        )
+        .with_min_samples(2)
+        .with_min_window(Duration::ZERO)
+        .with_max_window(Duration::ZERO);
+
+        let limiter = Limiter::new(gradient);
+
+        /*
+         * Warm up
+         *
+         * Concurrency = 8
+         * Steady latency
+         */
+        let mut tokens = Vec::with_capacity(5);
+        for _ in 0..8 {
+            let token = limiter.try_acquire().await.unwrap();
+            tokens.push(token);
+        }
+        for mut token in tokens {
+            token.set_latency(Duration::from_millis(25));
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+
+        /*
+         * Concurrency = 10
+         * Steady latency
+         */
+        let mut tokens = Vec::with_capacity(9);
+        for _ in 0..10 {
+            let token = limiter.try_acquire().await.unwrap();
+            tokens.push(token);
+        }
+        for mut token in tokens {
+            token.set_latency(Duration::from_millis(25));
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+        let higher_limit = limiter.limit();
+        assert!(
+            higher_limit > INIT_LIMIT,
+            "steady latency + high concurrency: increase limit"
+        );
+
+        /*
+         * Concurrency = 10
+         * 20x previous latency
+         */
+        let mut tokens = Vec::with_capacity(10);
+        for _ in 0..10 {
+            let mut token = limiter.try_acquire().await.unwrap();
+            token.set_latency(Duration::from_millis(500));
+            tokens.push(token);
+        }
+        for token in tokens {
+            limiter.release(token, Some(Outcome::Success)).await;
+        }
+        assert!(
+            limiter.limit() < higher_limit,
+            "increased latency: decrease limit"
+        );
     }
 }

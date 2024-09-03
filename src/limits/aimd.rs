@@ -18,7 +18,7 @@ use super::LimitAlgorithm;
 pub struct Aimd {
     min_limit: usize,
     max_limit: usize,
-    decrease_factor: f32,
+    decrease_factor: f64,
     increase_by: usize,
     min_utilisation_threshold: f64,
 
@@ -26,13 +26,13 @@ pub struct Aimd {
 }
 
 impl Aimd {
-    const DEFAULT_DECREASE_FACTOR: f32 = 0.9;
+    const DEFAULT_DECREASE_FACTOR: f64 = 0.9;
     const DEFAULT_INCREASE: usize = 1;
     const DEFAULT_MIN_LIMIT: usize = 1;
     const DEFAULT_MAX_LIMIT: usize = 1000;
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
-    pub fn with_initial_limit(initial_limit: usize) -> Self {
+    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -46,7 +46,7 @@ impl Aimd {
         }
     }
 
-    pub fn decrease_factor(self, factor: f32) -> Self {
+    pub fn decrease_factor(self, factor: f64) -> Self {
         assert!((0.5..1.0).contains(&factor));
         Self {
             decrease_factor: factor,
@@ -106,11 +106,7 @@ impl LimitAlgorithm for Aimd {
             Overload => {
                 self.limit
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |limit| {
-                        let limit = limit as f32 * self.decrease_factor;
-
-                        // Floor instead of round, so the limit reduces even with small numbers.
-                        // E.g. round(2 * 0.9) = 2, but floor(2 * 0.9) = 1
-                        let limit = limit.floor() as usize;
+                        let limit = multiplicative_decrease(limit, self.decrease_factor);
 
                         Some(limit.clamp(self.min_limit, self.max_limit))
                     })
@@ -119,6 +115,14 @@ impl LimitAlgorithm for Aimd {
         }
         self.limit.load(Ordering::SeqCst)
     }
+}
+
+pub(super) fn multiplicative_decrease(limit: usize, decrease_factor: f64) -> usize {
+    let limit = limit as f64 * decrease_factor;
+
+    // Floor instead of round, so the limit reduces even with small numbers.
+    // E.g. round(2 * 0.9) = 2, but floor(2 * 0.9) = 1
+    limit.floor() as usize
 }
 
 #[cfg(test)]
@@ -133,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_decrease_limit_on_overload() {
-        let aimd = Aimd::with_initial_limit(10)
+        let aimd = Aimd::new_with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
 
@@ -149,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_increase_limit_on_success_when_using_gt_util_threshold() {
-        let aimd = Aimd::with_initial_limit(4)
+        let aimd = Aimd::new_with_initial_limit(4)
             .decrease_factor(0.5)
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
@@ -166,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_not_change_limit_on_success_when_using_lt_util_threshold() {
-        let aimd = Aimd::with_initial_limit(4)
+        let aimd = Aimd::new_with_initial_limit(4)
             .decrease_factor(0.5)
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
@@ -181,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_not_change_limit_when_no_outcome() {
-        let aimd = Aimd::with_initial_limit(10)
+        let aimd = Aimd::new_with_initial_limit(10)
             .decrease_factor(0.5)
             .increase_by(1);
 

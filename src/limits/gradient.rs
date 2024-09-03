@@ -46,7 +46,7 @@ impl Gradient {
     const DEFAULT_TOLERANCE: f64 = 2.;
     const DEFAULT_SMOOTHING: f64 = 0.2;
 
-    pub fn with_initial_limit(initial_limit: usize) -> Self {
+    pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         assert!(initial_limit > 0);
 
         Self {
@@ -141,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         static INIT_LIMIT: usize = 10;
-        let gradient = Gradient::with_initial_limit(INIT_LIMIT);
+        let gradient = Gradient::new_with_initial_limit(INIT_LIMIT);
 
         let limiter = Limiter::new(gradient);
 

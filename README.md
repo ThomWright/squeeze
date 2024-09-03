@@ -16,7 +16,57 @@ Concurrency limits can help protect a system from becoming overloaded, and these
 
 See [background](./docs/background.md) for more details.
 
-### Example
+## Goals
+
+This library aims to:
+
+1. Achieve optimally high throughput and low latency.
+2. Shed load and apply backpressure in response to congestion or overload.
+3. Fairly distribute available resources between independent clients with zero coordination.
+
+## Limit algorithms
+
+The congestion-based algorithms come in several flavours:
+
+- **Loss-based** – respond to failed jobs (i.e. overload). Feedback can be implicit (e.g. a timeout) or explicit (e.g. an HTTP 429 or 503 status).
+- **Delay-based** – respond to increases in latency (i.e. congestion). Feedback is implicit.
+
+| Algorithm                         | Feedback       | Response             | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                                       |
+|-----------------------------------|----------------|----------------------|--------------------------------------------------------------------------------------------------|
+| [AIMD](src/limit/aimd.rs)         | Loss           | AIMD                 | Fair, but can out-compete delay-based algorithms                                                 |
+| [Gradient](src/limit/gradient.rs) | Delay          | AIMD                 | TODO: ?                                                                                          |
+| [Vegas](src/limit/vegas.rs)       | Loss and delay | AIAD (AIMD for loss) | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) until overload (loss) |
+
+### Example topology
+
+The example below shows two applications using limiters on the client (output) and on the server (input), using different algorithms for each.
+
+![Example topology](docs/assets/example-topology.png)
+
+### Caveats
+
+TODO:
+
+- Loss-based algorithms require a reliable signal for load-based errors.
+  - If configured to reduce concurrency for non-load-based errors, they can exacerbate availability problems when these errors occur.
+- Delay-based algorithms work more reliably with predictable latency.
+  - For example, short bursts of increased latency from GC pauses could cause an outsized reduction in concurrency limits.
+  - Windowing can help with this.
+- Cold-start problem: capacity limits are not known at start up.
+  - There's a need to probe to discover this. Requests could be unnecessarily limited until the limit is increased to match capacity.
+  - Can be mitigated with single immediate retries (from a token bucket?) on the client, which might get load balanced to a server with available capacity.
+
+## FAQ
+
+> Does this require coordination between multiple processes?
+
+No! The congestion avoidance is based on TCP congestion control algorithms which are designed to work independently. In TCP, each transmitting socket independently detects congestion and reacts accordingly.
+
+## Installing, running and testing
+
+TODO:
+
+## Example
 
 ```rust
 use std::sync::Arc;
@@ -44,56 +94,6 @@ tokio_test::block_on(async move {
     limiter.release(token, Some(Outcome::Success)).await;
 });
 ```
-
-## Goals
-
-This library aims to:
-
-1. Achieve optimally high throughput and low latency.
-2. Shed load and apply backpressure in response to congestion or overload.
-3. Fairly distribute available resources between independent clients with zero coordination.
-
-## Limit algorithms
-
-The congestion-based algorithms come in several flavours:
-
-- Loss-based – respond to failed jobs (i.e. overload). Feedback can be implicit (e.g. a timeout) or explicit (e.g. an HTTP 429 or 503 status).
-- Delay-based – respond to increases in latency (i.e. congestion). Feedback is implicit.
-
-| Algorithm                         | Feedback       | Response | [Fairness](https://en.wikipedia.org/wiki/Fairness_measure)                                       |
-|-----------------------------------|----------------|----------|--------------------------------------------------------------------------------------------------|
-| [AIMD](src/limit/aimd.rs)         | Loss           | AIMD     | Fair, but can out-compete delay-based algorithms                                                 |
-| [Gradient](src/limit/gradient.rs) | Delay          | AIMD     | TODO: ?                                                                                          |
-| [Vegas](src/limit/vegas.rs)       | Loss and delay | AIAD     | [Proportional](https://en.wikipedia.org/wiki/Proportional-fair_scheduling) until overload (loss) |
-
-### Example topology
-
-The example below shows two applications using limiters on the client (output) and on the server (input), using different algorithms for each.
-
-![Example topology](docs/assets/example-topology.png)
-
-### Caveats
-
-TODO:
-
-- Loss-based algorithms require a reliable signal for load-based errors.
-  - If configured to reduce concurrency for non-load-based errors, they can exacerbate availability problems when these errors occur.
-- Delay-based algorithms work more reliably with predictable latency.
-  - For example, short bursts of increased latency from GC pauses could cause an outsized reduction in concurrency limits.
-  - Windowing can help with this.
-- Cold-start problem: capacity limits are not known at start up.
-  - There's a need to probe to discover this. Requests could be unnecessarily limited until the limit is increased to match capacity.
-  - Can be mitigated with single immediate retries (from a token bucket?), which might get load balanced to a server with available capacity.
-
-## FAQ
-
-> Does this require coordination between multiple processes?
-
-No! The congestion avoidance is based on TCP congestion control algorithms which are designed to work independently. In TCP, each transmitting socket independently detects congestion and reacts accordingly.
-
-## Installing, running and testing
-
-TODO:
 
 ## Prior art
 
