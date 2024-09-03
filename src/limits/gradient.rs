@@ -14,7 +14,7 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm};
 /// Considers the difference in average latency between a short time window and a longer window.
 /// Changes in these values is considered an indicator of a change in load on the system.
 ///
-/// Wrap with a [`crate::windowed::Windowed`] to control the short time window, otherwise the latest
+/// Wrap with a [`crate::limits::windowed::Windowed`] to control the short time window, otherwise the latest
 /// sample is used.
 ///
 /// Inspired by TCP congestion control algorithms using delay gradients.

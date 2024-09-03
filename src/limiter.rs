@@ -265,7 +265,7 @@ impl<'t> Token<'t> {
 }
 
 impl Drop for Token<'_> {
-    /// Reduces the number of jobs in flight.
+    /// Reduces the number of jobs in flight and releases the token back to the available pool.
     fn drop(&mut self) {
         self.in_flight.fetch_sub(1, Ordering::AcqRel);
     }

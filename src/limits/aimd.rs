@@ -6,7 +6,7 @@ use crate::{limits::Sample, Outcome};
 
 use super::LimitAlgorithm;
 
-/// Loss-based congestion avoidance.
+/// Loss-based overload avoidance.
 ///
 /// Additive-increase, multiplicative decrease.
 ///

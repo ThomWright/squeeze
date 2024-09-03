@@ -12,7 +12,7 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 ///
 /// The window duration is dynamic, based on latencies seen in the previous window.
 ///
-/// Various [aggregators](crate::aggregators) are available to aggregate samples.
+/// Various [aggregators](crate::aggregation) are available to aggregate samples.
 #[derive(Debug)]
 pub struct Windowed<L, S> {
     window_bounds: RangeInclusive<Duration>,

@@ -1,4 +1,4 @@
-//! Sample aggregators.
+//! [Sample](crate::limits::Sample) aggregators.
 
 use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 
