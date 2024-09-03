@@ -1,6 +1,6 @@
 //! Sample aggregators.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 
 use crate::{limits::Sample, Outcome};
 
@@ -18,6 +18,7 @@ pub trait Aggregator {
 }
 
 /// Average latency and concurrency (in flight).
+#[derive(Debug)]
 pub struct Average {
     latency_sum: Duration,
     in_flight_sum: u128,
@@ -29,7 +30,8 @@ pub struct Average {
 pub struct Percentile {
     percentile: f64,
     overload: Outcome,
-    samples: BTreeMap<Duration, Sample>,
+    num_samples: usize,
+    samples: BTreeMap<Duration, Vec<Sample>>,
 }
 
 impl Aggregator for Average {
@@ -77,20 +79,30 @@ impl Percentile {
             ..Default::default()
         }
     }
+
+    fn percentile_sample(&self) -> Option<&Sample> {
+        let index = self.percentile_index();
+
+        self.samples
+            .iter()
+            .flat_map(|(_, sample)| sample)
+            .nth(index)
+    }
+
+    fn percentile_index(&self) -> usize {
+        ((self.num_samples as f64 * self.percentile).ceil() as usize).max(1) - 1
+    }
 }
 
 impl Aggregator for Percentile {
     fn sample(&mut self, sample: Sample) -> Sample {
         self.overload = self.overload.overloaded_or(sample.outcome);
-        self.samples.insert(sample.latency, sample);
+        self.samples.entry(sample.latency).or_default().push(sample);
+        self.num_samples += 1;
 
-        let index = (self.samples.len() as f64 * self.percentile).ceil() as usize;
-
-        let (latency, perc_sample) = self
-            .samples
-            .iter()
-            .nth(index - 1)
-            .expect("index should exist");
+        let perc_sample = self
+            .percentile_sample()
+            .expect("Sample should exist at expected index");
 
         Sample {
             // TODO: what is best to do with the concurrency (in flight)?
@@ -99,13 +111,13 @@ impl Aggregator for Percentile {
             // - percentile?
             // - match the sample of the latency percentile? <- Doing this one for now
             in_flight: perc_sample.in_flight,
-            latency: *latency,
+            latency: perc_sample.latency,
             outcome: self.overload,
         }
     }
 
     fn sample_size(&self) -> usize {
-        self.samples.len()
+        self.num_samples
     }
 
     fn reset(&mut self) {
@@ -121,8 +133,20 @@ impl Default for Percentile {
         Self {
             percentile: 0.5,
             samples: BTreeMap::new(),
+            num_samples: 0,
             overload: Outcome::Success,
         }
+    }
+}
+
+impl Debug for Percentile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Percentile")
+            .field("percentile", &self.percentile)
+            .field("overload", &self.overload)
+            .field("samples", &self.samples)
+            .field("(aggregated sample)", &self.percentile_sample())
+            .finish()
     }
 }
 

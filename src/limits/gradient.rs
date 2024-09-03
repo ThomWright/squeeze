@@ -20,6 +20,7 @@ use super::{defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm};
 /// Inspired by TCP congestion control algorithms using delay gradients.
 ///
 /// - [Revisiting TCP Congestion Control Using Delay Gradients](https://hal.science/hal-01597987/)
+#[derive(Debug)]
 pub struct Gradient {
     min_limit: usize,
     max_limit: usize,
@@ -28,6 +29,7 @@ pub struct Gradient {
     inner: Mutex<Inner>,
 }
 
+#[derive(Debug)]
 struct Inner {
     long_window_latency: moving_avg::ExpSmoothed,
     limit: f64,

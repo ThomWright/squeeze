@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
@@ -48,6 +49,7 @@ pub struct Vegas {
     inner: Mutex<Inner>,
 }
 
+#[derive(Debug)]
 struct Inner {
     /// The minimum observed latency, used as a baseline.
     ///
@@ -152,7 +154,7 @@ impl LimitAlgorithm for Vegas {
         if sample.latency < inner.base_latency {
             // Record a baseline "no load" latency and keep the limit.
             inner.base_latency = sample.latency;
-            return self.limit.load(Ordering::Acquire);
+            // return self.limit.load(Ordering::Acquire);
         }
 
         let update_limit = |limit: usize| {
@@ -197,9 +199,24 @@ impl LimitAlgorithm for Vegas {
     }
 }
 
+impl Debug for Vegas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vegas")
+            .field("limit", &self.limit)
+            .field("min_limit", &self.min_limit)
+            .field("max_limit", &self.max_limit)
+            .field("alpha(1)", &(self.alpha)(1))
+            .field("beta(1)", &(self.beta)(1))
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::VecDeque, time::Duration};
+
+    use itertools::Itertools;
 
     use crate::{Limiter, Outcome};
 
@@ -208,9 +225,9 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         static INIT_LIMIT: usize = 10;
-        let gradient = Vegas::new_with_initial_limit(INIT_LIMIT);
+        let vegas = Vegas::new_with_initial_limit(INIT_LIMIT);
 
-        let limiter = Limiter::new(gradient);
+        let limiter = Limiter::new(vegas);
 
         /*
          * Warm up
@@ -244,7 +261,7 @@ mod tests {
         let higher_limit = limiter.limit();
         assert!(
             higher_limit > INIT_LIMIT,
-            "steady latency + high concurrency: increase limit"
+            "Steady latency + high concurrency => increase limit"
         );
 
         /*
@@ -262,7 +279,7 @@ mod tests {
         }
         assert!(
             limiter.limit() < higher_limit,
-            "increased latency: decrease limit"
+            "Increased latency => decrease limit"
         );
     }
 
@@ -272,67 +289,73 @@ mod tests {
         use crate::limits::Windowed;
 
         static INIT_LIMIT: usize = 10;
-        let gradient = Windowed::new(
+        let vegas = Windowed::new(
             Vegas::new_with_initial_limit(INIT_LIMIT),
             Percentile::default(),
         )
-        .with_min_samples(2)
+        .with_min_samples(3)
         .with_min_window(Duration::ZERO)
         .with_max_window(Duration::ZERO);
 
-        let limiter = Limiter::new(gradient);
+        let limiter = Limiter::new(vegas);
+
+        let mut next_tokens = VecDeque::with_capacity(9);
 
         /*
          * Warm up
          *
-         * Concurrency = 8
-         * Steady latency
+         * Steady latency, keeping concurrency high
          */
-        let mut tokens = Vec::with_capacity(5);
-        for _ in 0..8 {
+        for _ in 0..9 {
             let token = limiter.try_acquire().await.unwrap();
-            tokens.push(token);
+            next_tokens.push_back(token);
         }
-        for mut token in tokens {
+
+        let release_tokens = next_tokens.drain(0..).collect_vec();
+        for mut token in release_tokens {
             token.set_latency(Duration::from_millis(25));
             limiter.release(token, Some(Outcome::Success)).await;
+
+            let token = limiter.try_acquire().await.unwrap();
+            next_tokens.push_back(token);
         }
 
         /*
-         * Concurrency = 10
          * Steady latency
          */
-        let mut tokens = Vec::with_capacity(9);
-        for _ in 0..10 {
-            let token = limiter.try_acquire().await.unwrap();
-            tokens.push(token);
-        }
-        for mut token in tokens {
+        let release_tokens = next_tokens.drain(0..).collect_vec();
+        for mut token in release_tokens {
             token.set_latency(Duration::from_millis(25));
             limiter.release(token, Some(Outcome::Success)).await;
+
+            let token = limiter.try_acquire().await.unwrap();
+            next_tokens.push_back(token);
         }
+
         let higher_limit = limiter.limit();
         assert!(
             higher_limit > INIT_LIMIT,
-            "steady latency + high concurrency: increase limit"
+            "Steady latency + high concurrency => increase limit. Limit: {}",
+            higher_limit
         );
 
         /*
-         * Concurrency = 10
-         * 20x previous latency
+         * 40x previous latency
          */
-        let mut tokens = Vec::with_capacity(10);
-        for _ in 0..10 {
-            let mut token = limiter.try_acquire().await.unwrap();
-            token.set_latency(Duration::from_millis(500));
-            tokens.push(token);
-        }
-        for token in tokens {
+        let release_tokens = next_tokens.drain(0..).collect_vec();
+        for mut token in release_tokens {
+            token.set_latency(Duration::from_millis(1000));
             limiter.release(token, Some(Outcome::Success)).await;
+
+            let token = limiter.try_acquire().await.unwrap();
+            next_tokens.push_back(token);
         }
+
+        let lower_limit = limiter.limit();
         assert!(
-            limiter.limit() < higher_limit,
-            "increased latency: decrease limit"
+            lower_limit < higher_limit,
+            "Increased latency => decrease limit. Limit: {}",
+            lower_limit
         );
     }
 }

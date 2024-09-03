@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use super::{LimitAlgorithm, Sample};
 
 /// A simple, fixed concurrency limit.
+#[derive(Debug)]
 pub struct Fixed(usize);
 impl Fixed {
     pub fn new(limit: usize) -> Self {

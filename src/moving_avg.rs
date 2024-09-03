@@ -3,6 +3,7 @@
 use std::{collections::VecDeque, time::Duration};
 
 /// An [exponential moving average](https://en.wikipedia.org/wiki/Exponential_smoothing).
+#[derive(Debug)]
 pub struct ExpSmoothed {
     /// Smoothing factor `α`. Weighting for the previous duration in the window.
     ///
@@ -59,6 +60,7 @@ impl ExpSmoothed {
 }
 
 /// A [simple moving average](https://en.wikipedia.org/wiki/Moving_average#Simple_moving_average).
+#[derive(Debug)]
 pub struct Simple {
     window_size: u16,
 

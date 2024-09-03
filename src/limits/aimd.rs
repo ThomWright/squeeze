@@ -15,6 +15,7 @@ use super::LimitAlgorithm;
 /// 2. the utilisation of the current limit is high.
 ///
 /// Reduces available concurrency by a factor when load-based errors are detected.
+#[derive(Debug)]
 pub struct Aimd {
     min_limit: usize,
     max_limit: usize,

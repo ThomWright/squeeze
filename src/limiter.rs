@@ -43,6 +43,8 @@ pub struct Limiter<T> {
 pub struct Token<'t> {
     _permit: SemaphorePermit<'t>,
     start: Instant,
+    #[cfg(test)]
+    latency: Duration,
     in_flight: Arc<AtomicUsize>,
 }
 
@@ -115,7 +117,6 @@ where
             }
             Err(TryAcquireError::NoPermits) => {
                 if let Some(delay) = self.rejection_delay {
-                    dbg!("try_acquire rejection delay", delay);
                     tokio::time::sleep(delay).await;
                 }
                 None
@@ -153,11 +154,7 @@ where
     /// Set the outcome to `None` to ignore the job.
     pub async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) {
         if let Some(outcome) = outcome {
-            let sample = Sample {
-                latency: token.start.elapsed(),
-                in_flight: self.in_flight(),
-                outcome,
-            };
+            let sample = self.new_sample(&token, outcome);
 
             let new_limit = self.limit_algo.update(sample).await;
 
@@ -207,6 +204,24 @@ where
         drop(token);
     }
 
+    #[cfg(test)]
+    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
+        Sample {
+            latency: token.latency,
+            in_flight: self.in_flight(),
+            outcome,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
+        Sample {
+            latency: token.start.elapsed(),
+            in_flight: self.in_flight(),
+            outcome,
+        }
+    }
+
     pub(crate) fn available(&self) -> usize {
         self.semaphore.available_permits()
     }
@@ -234,6 +249,8 @@ impl<'t> Token<'t> {
         Self {
             _permit: permit,
             start: Instant::now(),
+            #[cfg(test)]
+            latency: Duration::ZERO,
             in_flight,
         }
     }
@@ -243,6 +260,7 @@ impl<'t> Token<'t> {
         use std::ops::Sub;
 
         self.start = Instant::now().sub(latency);
+        self.latency = latency;
     }
 }
 
