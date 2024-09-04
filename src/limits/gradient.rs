@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use conv::ConvAsUtil;
 use tokio::sync::Mutex;
 
 use crate::{limits::Sample, moving_avg};
@@ -81,7 +82,6 @@ impl LimitAlgorithm for Gradient {
     }
 
     async fn update(&self, sample: Sample) -> usize {
-        // FIXME: Improve or justify safety of numerical conversions
         if sample.latency < MIN_SAMPLE_LATENCY {
             return self.limit.load(Ordering::Acquire);
         }
@@ -125,7 +125,10 @@ impl LimitAlgorithm for Gradient {
         new_limit = (new_limit).clamp(self.min_limit as f64, self.max_limit as f64);
 
         inner.limit = new_limit;
-        let rounded_limit = new_limit as usize;
+
+        let rounded_limit = new_limit
+            .approx()
+            .expect("should be clamped within usize bounds");
         self.limit.store(rounded_limit, Ordering::Release);
 
         rounded_limit

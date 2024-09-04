@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use conv::ConvAsUtil;
 
 use crate::{limits::Sample, Outcome};
 
@@ -119,11 +120,13 @@ impl LimitAlgorithm for Aimd {
 }
 
 pub(super) fn multiplicative_decrease(limit: usize, decrease_factor: f64) -> usize {
+    assert!(decrease_factor <= 1.0, "should not increase the limit");
+
     let limit = limit as f64 * decrease_factor;
 
     // Floor instead of round, so the limit reduces even with small numbers.
     // E.g. round(2 * 0.9) = 2, but floor(2 * 0.9) = 1
-    limit.floor() as usize
+    limit.floor().approx().expect("should not have increased")
 }
 
 #[cfg(test)]

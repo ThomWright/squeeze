@@ -2,6 +2,8 @@
 
 use std::{collections::VecDeque, time::Duration};
 
+use conv::ConvUtil;
+
 /// An [exponential moving average](https://en.wikipedia.org/wiki/Exponential_smoothing).
 #[derive(Debug)]
 pub struct ExpSmoothed {
@@ -55,7 +57,7 @@ impl ExpSmoothed {
         assert!(k > 0, "window size must be > 0");
         assert!(k < u16::MAX, "window size mustn't overflow");
 
-        2.0 / ((k + 1) as f64)
+        2.0 / (f64::from(k + 1))
     }
 }
 
@@ -80,8 +82,11 @@ impl Simple {
     }
 
     pub fn sample(&mut self, sample: Duration) -> Duration {
-        // Safety: length is constrained to u16.
-        let count: u32 = self.values.len() as u32;
+        let count = self
+            .values
+            .len()
+            .approx_as::<u32>()
+            .expect("length is constrained to u16");
 
         if count >= self.window_size.into() {
             let prev = self.values.pop_front().expect("should be non-empty");

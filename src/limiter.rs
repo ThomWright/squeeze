@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use conv::ValueFrom;
 use tokio::{
     sync::{Semaphore, SemaphorePermit, TryAcquireError},
     time::{timeout, Instant},
@@ -93,7 +94,7 @@ where
 
     /// When rejecting a request, wait a while before returning the rejection.
     ///
-    /// This can help reduce ...
+    /// This can help reduce the rate of retries.
     pub fn with_rejection_delay(mut self, delay: Duration) -> Self {
         self.rejection_delay = Some(delay);
         self
@@ -178,7 +179,10 @@ where
                         // If there aren't enough permits available then this will wait until enough
                         // become available. This could take a while, so we do this in the background.
                         let permits = semaphore
-                            .acquire_many((old_limit - new_limit) as u32)
+                            .acquire_many(
+                                u32::value_from(old_limit - new_limit)
+                                    .expect("change in limit shouldn't be > u32::MAX"),
+                            )
                             .await
                             .expect("we own the semaphore, we shouldn't have closed it");
 

@@ -26,7 +26,7 @@ impl Mean for Duration {
         I: Iterator<Item = Duration>,
     {
         let mut sum = Duration::ZERO;
-        let mut count: usize = 0;
+        let mut count: u32 = 0;
 
         for v in iter {
             sum += v;
@@ -34,7 +34,7 @@ impl Mean for Duration {
         }
 
         if count > 0 {
-            sum / count as u32
+            sum / count
         } else {
             sum
         }

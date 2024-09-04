@@ -2,6 +2,8 @@
 
 use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 
+use conv::ConvUtil;
+
 use crate::{limits::Sample, Outcome};
 
 /// Aggregates multiple samples into one.
@@ -36,7 +38,6 @@ pub struct Percentile {
 
 impl Aggregator for Average {
     fn sample(&mut self, sample: Sample) -> Sample {
-        // TODO: review precision conversions
         self.latency_sum += sample.latency;
         self.in_flight_sum += sample.in_flight as u128;
         self.overload = self.overload.overloaded_or(sample.outcome);
@@ -83,14 +84,28 @@ impl Percentile {
     fn percentile_sample(&self) -> Option<&Sample> {
         let index = self.percentile_index();
 
-        self.samples
-            .iter()
-            .flat_map(|(_, sample)| sample)
-            .nth(index)
+        index.and_then(|index| {
+            self.samples
+                .iter()
+                .flat_map(|(_, sample)| sample)
+                .nth(index)
+        })
     }
 
-    fn percentile_index(&self) -> usize {
-        ((self.num_samples as f64 * self.percentile).ceil() as usize).max(1) - 1
+    fn percentile_index(&self) -> Option<usize> {
+        if self.num_samples == 0 {
+            return None;
+        }
+
+        let float_index = self.num_samples as f64 * self.percentile;
+
+        Some(
+            float_index
+                .ceil()
+                .approx_as::<usize>()
+                .expect("percentile should be < 1")
+                - 1,
+        )
     }
 }
 

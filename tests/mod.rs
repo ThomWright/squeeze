@@ -1,6 +1,7 @@
 use std::{cmp::Reverse, collections::BinaryHeap, time::Duration};
 
 use async_trait::async_trait;
+use conv::ValueFrom;
 use itertools::Itertools;
 use rand::{prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 use statrs::{
@@ -501,7 +502,8 @@ impl Summary {
             .count()
     }
     fn mean_latency(&self) -> Duration {
-        self.requests.iter().map(|r| r.latency).sum::<Duration>() / self.total_requests() as u32
+        self.requests.iter().map(|r| r.latency).sum::<Duration>()
+            / u32::value_from(self.total_requests()).unwrap()
     }
     fn max_concurrency(&self) -> usize {
         self.event_log
