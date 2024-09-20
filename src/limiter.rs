@@ -112,10 +112,7 @@ where
     /// Returns `None` if there are none available.
     pub async fn try_acquire(&self) -> Option<Token<'_>> {
         match self.semaphore.try_acquire() {
-            Ok(permit) => {
-                self.in_flight.fetch_add(1, Ordering::AcqRel);
-                Some(Token::new(permit, self.in_flight.clone()))
-            }
+            Ok(permit) => Some(Token::new(permit, self.in_flight.clone())),
             Err(TryAcquireError::NoPermits) => {
                 if let Some(delay) = self.rejection_delay {
                     tokio::time::sleep(delay).await;
@@ -250,6 +247,7 @@ where
 
 impl<'t> Token<'t> {
     fn new(permit: SemaphorePermit<'t>, in_flight: Arc<AtomicUsize>) -> Self {
+        in_flight.fetch_add(1, Ordering::AcqRel);
         Self {
             _permit: permit,
             start: Instant::now(),
