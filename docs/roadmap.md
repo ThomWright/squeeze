@@ -16,7 +16,7 @@
     - [x] Average sampler
     - [ ] Configure window duration decision policy?
 - [ ] Tests
-  - [ ] Vegas
+  - [x] Vegas
 - [ ] Simulator:
   - [ ] Topology
     - [ ] `Source` and `Sink` interfaces?
@@ -28,11 +28,12 @@
     - [ ] Graphs
   - [ ] Test fairness
 - [ ] Limiter
-  - [ ] Rejection delay
+  - [x] Rejection delay
     - Option to add delay before rejecting jobs. Intended to slow down clients, e.g. RabbitMQ retries.
   - [ ] Static partitioning
+  - [ ] Dynamic partitioning?
     - How possible would it be to partition somewhat dynamically? E.g. on customer IDs?
-  - [ ] LIFO
+  - [ ] LIFO for jobs waiting for a token
     - Optimise for latency
 - [ ] Documentation
   - [ ] README

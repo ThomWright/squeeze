@@ -47,12 +47,12 @@ The example below shows two applications using limiters on the client (output) a
 
 TODO:
 
-- Loss-based algorithms require a reliable signal for load-based errors.
+- **Loss-based algorithms require a reliable signal for load-based errors.**
   - If configured to reduce concurrency for non-load-based errors, they can exacerbate availability problems when these errors occur.
-- Delay-based algorithms work more reliably with predictable latency.
+- **Delay-based algorithms work more reliably with predictable latency.**
   - For example, short bursts of increased latency from GC pauses could cause an outsized reduction in concurrency limits.
   - Windowing can help with this.
-- Cold-start problem: capacity limits are not known at start up.
+- **Cold-start problem: capacity limits are not known at start up.**
   - There's a need to probe to discover this. Requests could be unnecessarily limited until the limit is increased to match capacity.
   - Can be mitigated with single immediate retries (from a token bucket?) on the client, which might get load balanced to a server with available capacity.
 
