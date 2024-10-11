@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    ops::RangeInclusive,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
@@ -7,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::Outcome;
+use crate::{limits::defaults, Outcome};
 
 use super::{aimd::multiplicative_decrease, defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
@@ -58,9 +59,6 @@ struct Inner {
 }
 
 impl Vegas {
-    const DEFAULT_MIN_LIMIT: usize = 1;
-    const DEFAULT_MAX_LIMIT: usize = 1000;
-
     const DEFAULT_ALPHA_MULTIPLIER: f64 = 3_f64;
     const DEFAULT_BETA_MULTIPLIER: f64 = 6_f64;
 
@@ -71,12 +69,27 @@ impl Vegas {
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
-        assert!(initial_limit > 0);
+        Self::new(
+            initial_limit,
+            defaults::DEFAULT_MIN_LIMIT..=defaults::DEFAULT_MAX_LIMIT,
+        )
+    }
+
+    pub fn new(initial_limit: usize, limit_range: RangeInclusive<usize>) -> Self {
+        assert!(*limit_range.start() >= 1, "Limits must be at least 1");
+        assert!(
+            initial_limit >= *limit_range.start(),
+            "Initial limit less than minimum"
+        );
+        assert!(
+            initial_limit <= *limit_range.end(),
+            "Initial limit more than maximum"
+        );
 
         Self {
             limit: AtomicUsize::new(initial_limit),
-            min_limit: Self::DEFAULT_MIN_LIMIT,
-            max_limit: Self::DEFAULT_MAX_LIMIT,
+            min_limit: *limit_range.start(),
+            max_limit: *limit_range.end(),
 
             alpha: Box::new(|limit| {
                 Self::DEFAULT_ALPHA_MULTIPLIER * (limit as f64).log10().max(1_f64)

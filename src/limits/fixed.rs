@@ -18,6 +18,7 @@ impl LimitAlgorithm for Fixed {
     fn limit(&self) -> usize {
         self.0
     }
+
     async fn update(&self, _reading: Sample) -> usize {
         self.0
     }
