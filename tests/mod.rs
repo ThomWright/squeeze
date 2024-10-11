@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use squeeze::{
     limits::{Aimd, LimitAlgorithm, Sample},
-    Limiter, LimiterState, Outcome, Token,
+    DefaultLimiter, Limiter, LimiterState, Outcome, Token,
 };
 
 mod iter_ext;
@@ -47,14 +47,14 @@ impl LimitAlgorithm for LimitWrapper {
 
 /// Models a Poisson process.
 struct Client {
-    limiter: Option<Limiter<LimitWrapper>>,
+    limiter: Option<DefaultLimiter<LimitWrapper>>,
 
     /// Poisson process, exponential interarrival times.
     interarrival: Exp,
 }
 
 struct Server {
-    limiter: Option<Limiter<LimitWrapper>>,
+    limiter: Option<DefaultLimiter<LimitWrapper>>,
 
     latency: Erlang,
 
@@ -164,7 +164,7 @@ mod event_log {
 
 impl Client {
     /// Create a client which sends `rps` requests per second on average.
-    fn with_rps(limiter: Option<Limiter<LimitWrapper>>, rps: f64) -> Self {
+    fn with_rps(limiter: Option<DefaultLimiter<LimitWrapper>>, rps: f64) -> Self {
         Self {
             limiter,
             interarrival: Exp::new(rps).unwrap(),
@@ -218,7 +218,7 @@ impl Client {
 impl Server {
     /// Create a server with a concurrency limiter, a latency distribution and a failure rate.
     fn new(
-        limiter: Option<Limiter<LimitWrapper>>,
+        limiter: Option<DefaultLimiter<LimitWrapper>>,
         latency_profile: LatencyProfile,
         failure_rate: f64,
     ) -> Self {
@@ -545,7 +545,7 @@ async fn test() {
     let simulation_duration = Duration::from_secs(1);
 
     let client = Client::with_rps(
-        Some(Limiter::new(LimitWrapper::Aimd(
+        Some(DefaultLimiter::new(LimitWrapper::Aimd(
             Aimd::new_with_initial_limit(10)
                 .with_max_limit(20)
                 .decrease_factor(0.9)

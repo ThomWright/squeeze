@@ -6,6 +6,7 @@ use super::{LimitAlgorithm, Sample};
 #[derive(Debug)]
 pub struct Fixed(usize);
 impl Fixed {
+    #[allow(missing_docs)]
     pub fn new(limit: usize) -> Self {
         assert!(limit > 0);
 

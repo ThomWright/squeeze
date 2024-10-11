@@ -45,6 +45,7 @@ struct Window<S> {
 impl<L: LimitAlgorithm, S: Aggregator> Windowed<L, S> {
     const DEFAULT_MIN_SAMPLES: usize = 10;
 
+    #[allow(missing_docs)]
     pub fn new(inner: L, sampler: S) -> Self {
         let min_window = Duration::from_micros(1);
         Self {

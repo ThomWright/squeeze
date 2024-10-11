@@ -52,6 +52,7 @@ impl Gradient {
     const DEFAULT_TOLERANCE: f64 = 2.;
     const DEFAULT_SMOOTHING: f64 = 0.2;
 
+    #[allow(missing_docs)]
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         Self::new(
             initial_limit,
@@ -59,6 +60,7 @@ impl Gradient {
         )
     }
 
+    #[allow(missing_docs)]
     pub fn new(initial_limit: usize, limit_range: RangeInclusive<usize>) -> Self {
         assert!(*limit_range.start() >= 1, "Limits must be at least 1");
         assert!(
@@ -84,6 +86,7 @@ impl Gradient {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn with_max_limit(self, max: usize) -> Self {
         assert!(max > 0);
         Self {
@@ -157,7 +160,7 @@ impl LimitAlgorithm for Gradient {
 mod tests {
     use std::time::Duration;
 
-    use crate::{Limiter, Outcome};
+    use crate::{DefaultLimiter, Limiter, Outcome};
 
     use super::*;
 
@@ -166,7 +169,7 @@ mod tests {
         static INIT_LIMIT: usize = 10;
         let gradient = Gradient::new_with_initial_limit(INIT_LIMIT);
 
-        let limiter = Limiter::new(gradient);
+        let limiter = DefaultLimiter::new(gradient);
 
         /*
          * Concurrency = 10

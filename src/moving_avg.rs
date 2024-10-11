@@ -71,6 +71,7 @@ pub struct Simple {
 }
 
 impl Simple {
+    #[expect(dead_code)]
     pub fn new_with_window_size(window_size: u16) -> Self {
         assert!(window_size > 0, "window size must be > 0");
         Self {
@@ -81,6 +82,7 @@ impl Simple {
         }
     }
 
+    #[expect(dead_code)]
     pub fn sample(&mut self, sample: Duration) -> Duration {
         let count = self
             .values

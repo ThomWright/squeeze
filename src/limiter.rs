@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use conv::ValueFrom;
 use tokio::{
     sync::{Semaphore, SemaphorePermit, TryAcquireError},
@@ -22,15 +23,41 @@ use crate::limits::{LimitAlgorithm, Sample};
 ///
 /// The limit will be automatically adjusted based on observed latency (delay) and/or failures
 /// caused by overload (loss).
-#[derive(Debug)]
-pub struct Limiter<T> {
+#[async_trait]
+pub trait Limiter {
+    /// Try to immediately acquire a concurrency [Token].
+    ///
+    /// Returns `None` if there are none available.
+    async fn try_acquire(&self) -> Option<Token<'_>>;
+
+    /// Try to acquire a concurrency [Token], waiting for `duration` if there are none available.
+    ///
+    /// Returns `None` if there are none available after `duration`.
+    async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>>;
+
+    /// Return the concurrency [Token], along with the outcome of the job.
+    ///
+    /// The [Outcome] of the job, and the time taken to perform it, may be used
+    /// to update the concurrency limit.
+    ///
+    /// Set the outcome to `None` to ignore the job.
+    ///
+    /// Returns the new limit.
+    /// // TODO: do we need to return the new limit?
+    async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) -> usize;
+}
+
+/// A basic limiter.
+#[derive(Debug, Clone)]
+pub struct DefaultLimiter<T> {
     limit_algo: T,
     semaphore: Arc<Semaphore>,
-    limit: AtomicUsize,
+    limit: Arc<AtomicUsize>,
 
     /// Best-effort
     in_flight: Arc<AtomicUsize>,
 
+    // TODO: Turn rejection delay into a wrapper?
     rejection_delay: Option<Duration>,
 
     #[cfg(test)]
@@ -46,7 +73,7 @@ pub struct Token<'t> {
     start: Instant,
     #[cfg(test)]
     latency: Duration,
-    in_flight: Arc<AtomicUsize>,
+    in_flight: Vec<Arc<AtomicUsize>>,
 }
 
 /// A snapshot of the state of the [Limiter].
@@ -71,18 +98,18 @@ pub enum Outcome {
     Overload,
 }
 
-impl<T> Limiter<T>
+impl<T> DefaultLimiter<T>
 where
     T: LimitAlgorithm,
 {
     /// Create a limiter with a given limit control algorithm.
     pub fn new(limit_algo: T) -> Self {
         let initial_permits = limit_algo.limit();
-        assert!(initial_permits > 0);
+        assert!(initial_permits >= 1);
         Self {
             limit_algo,
             semaphore: Arc::new(Semaphore::new(initial_permits)),
-            limit: AtomicUsize::new(initial_permits),
+            limit: Arc::new(AtomicUsize::new(initial_permits)),
             in_flight: Arc::new(AtomicUsize::new(0)),
 
             rejection_delay: None,
@@ -103,20 +130,66 @@ where
     /// In some cases [Token]s are acquired asynchronously when updating the limit.
     #[cfg(test)]
     pub fn with_release_notifier(mut self, n: Arc<tokio::sync::Notify>) -> Self {
-        self.notifier = Some(n);
+        self.notifier.replace(n);
         self
     }
 
-    /// Try to immediately acquire a concurrency [Token].
-    ///
-    /// Returns `None` if there are none available.
-    pub async fn try_acquire(&self) -> Option<Token<'_>> {
+    #[cfg(test)]
+    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
+        Sample {
+            latency: token.latency,
+            in_flight: self.in_flight(),
+            outcome,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
+        Sample {
+            latency: token.start.elapsed(),
+            in_flight: self.in_flight(),
+            outcome,
+        }
+    }
+
+    fn available(&self) -> usize {
+        self.semaphore.available_permits()
+    }
+
+    pub(crate) fn limit(&self) -> usize {
+        self.limit.load(Ordering::Acquire)
+    }
+
+    fn in_flight(&self) -> usize {
+        self.in_flight.load(Ordering::Acquire)
+    }
+
+    /// The current state of the limiter.
+    pub fn state(&self) -> LimiterState {
+        LimiterState {
+            limit: self.limit(),
+            available: self.available(),
+            in_flight: self.in_flight(),
+        }
+    }
+
+    pub(crate) async fn on_rejection(&self) {
+        if let Some(delay) = self.rejection_delay {
+            tokio::time::sleep(delay).await;
+        }
+    }
+}
+
+#[async_trait]
+impl<T> Limiter for DefaultLimiter<T>
+where
+    T: LimitAlgorithm + Sync,
+{
+    async fn try_acquire(&self) -> Option<Token<'_>> {
         match self.semaphore.try_acquire() {
-            Ok(permit) => Some(Token::new(permit, self.in_flight.clone())),
+            Ok(permit) => Some(Token::new(permit).with_in_flight(self.in_flight.clone())),
             Err(TryAcquireError::NoPermits) => {
-                if let Some(delay) = self.rejection_delay {
-                    tokio::time::sleep(delay).await;
-                }
+                self.on_rejection().await;
                 None
             }
             Err(TryAcquireError::Closed) => {
@@ -125,16 +198,11 @@ where
         }
     }
 
-    /// Try to acquire a concurrency [Token], waiting for `duration` if there are none available.
-    ///
-    /// Returns `None` if there are none available after `duration`.
-    pub async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>> {
+    async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>> {
         match timeout(duration, self.semaphore.acquire()).await {
-            Ok(Ok(permit)) => Some(Token::new(permit, self.in_flight.clone())),
+            Ok(Ok(permit)) => Some(Token::new(permit).with_in_flight(self.in_flight.clone())),
             Err(_) => {
-                if let Some(delay) = self.rejection_delay {
-                    tokio::time::sleep(delay).await;
-                }
+                self.on_rejection().await;
                 None
             }
 
@@ -144,14 +212,8 @@ where
         }
     }
 
-    /// Return the concurrency [Token], along with the outcome of the job.
-    ///
-    /// The [Outcome] of the job, and the time taken to perform it, may be used
-    /// to update the concurrency limit.
-    ///
-    /// Set the outcome to `None` to ignore the job.
-    pub async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) {
-        if let Some(outcome) = outcome {
+    async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) -> usize {
+        let limit = if let Some(outcome) = outcome {
             let sample = self.new_sample(&token, outcome);
 
             let new_limit = self.limit_algo.update(sample).await;
@@ -200,61 +262,33 @@ where
                     }
                 }
             }
-        }
+
+            new_limit
+        } else {
+            self.limit_algo.limit()
+        };
 
         drop(token);
-    }
 
-    #[cfg(test)]
-    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
-        Sample {
-            latency: token.latency,
-            in_flight: self.in_flight(),
-            outcome,
-        }
-    }
-
-    #[cfg(not(test))]
-    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
-        Sample {
-            latency: token.start.elapsed(),
-            in_flight: self.in_flight(),
-            outcome,
-        }
-    }
-
-    pub(crate) fn available(&self) -> usize {
-        self.semaphore.available_permits()
-    }
-
-    pub(crate) fn limit(&self) -> usize {
-        self.limit.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn in_flight(&self) -> usize {
-        self.in_flight.load(Ordering::Acquire)
-    }
-
-    /// The current state of the limiter.
-    pub fn state(&self) -> LimiterState {
-        LimiterState {
-            limit: self.limit(),
-            available: self.available(),
-            in_flight: self.in_flight(),
-        }
+        limit
     }
 }
 
 impl<'t> Token<'t> {
-    fn new(permit: SemaphorePermit<'t>, in_flight: Arc<AtomicUsize>) -> Self {
-        in_flight.fetch_add(1, Ordering::AcqRel);
+    fn new(permit: SemaphorePermit<'t>) -> Self {
         Self {
             _permit: permit,
             start: Instant::now(),
             #[cfg(test)]
             latency: Duration::ZERO,
-            in_flight,
+            in_flight: vec![],
         }
+    }
+
+    pub(crate) fn with_in_flight(mut self, in_flight: Arc<AtomicUsize>) -> Self {
+        in_flight.fetch_add(1, Ordering::SeqCst);
+        self.in_flight.push(in_flight);
+        self
     }
 
     #[cfg(test)]
@@ -269,7 +303,9 @@ impl<'t> Token<'t> {
 impl Drop for Token<'_> {
     /// Reduces the number of jobs in flight and releases the token back to the available pool.
     fn drop(&mut self) {
-        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+        for in_flight in self.in_flight.iter() {
+            in_flight.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -303,11 +339,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::assert_elapsed;
-    use crate::{limits::Fixed, Limiter, Outcome};
+    use crate::{limits::Fixed, DefaultLimiter, Limiter, Outcome};
 
     #[tokio::test]
     async fn it_works() {
-        let limiter = Limiter::new(Fixed::new(10));
+        let limiter = DefaultLimiter::new(Fixed::new(10));
 
         let token = limiter.try_acquire().await.unwrap();
 
@@ -320,7 +356,7 @@ mod tests {
     async fn on_rejection_delay_acquire() {
         let delay = Duration::from_millis(50);
 
-        let limiter = Limiter::new(Fixed::new(1)).with_rejection_delay(delay);
+        let limiter = DefaultLimiter::new(Fixed::new(1)).with_rejection_delay(delay);
 
         let _token = limiter.try_acquire().await.unwrap();
 
@@ -335,7 +371,7 @@ mod tests {
     async fn on_rejection_delay_acquire_timeout() {
         let delay = Duration::from_millis(50);
 
-        let limiter = Limiter::new(Fixed::new(1)).with_rejection_delay(delay);
+        let limiter = DefaultLimiter::new(Fixed::new(1)).with_rejection_delay(delay);
 
         let _token = limiter.try_acquire().await.unwrap();
 

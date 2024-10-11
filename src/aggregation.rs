@@ -1,4 +1,4 @@
-//! [Sample](crate::limits::Sample) aggregators.
+//! [Sample] aggregators.
 
 use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 
@@ -15,7 +15,11 @@ pub trait Aggregator {
     ///
     /// Returns the current aggregated sample.
     fn sample(&mut self, sample: Sample) -> Sample;
+
+    #[allow(missing_docs)]
     fn sample_size(&self) -> usize;
+
+    #[allow(missing_docs)]
     fn reset(&mut self);
 }
 
@@ -70,6 +74,7 @@ impl Default for Average {
 }
 
 impl Percentile {
+    #[allow(missing_docs)]
     pub fn new(percentile: f64) -> Self {
         assert!(
             percentile > 0. && percentile < 1.,

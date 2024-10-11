@@ -35,6 +35,7 @@ impl Aimd {
     const DEFAULT_INCREASE: usize = 1;
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
+    #[allow(missing_docs)]
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         Self::new(
             initial_limit,
@@ -42,6 +43,7 @@ impl Aimd {
         )
     }
 
+    #[allow(missing_docs)]
     pub fn new(initial_limit: usize, limit_range: RangeInclusive<usize>) -> Self {
         assert!(*limit_range.start() >= 1, "Limits must be at least 1");
         assert!(
@@ -64,6 +66,7 @@ impl Aimd {
         }
     }
 
+    /// Set the multiplier which will be applied when decreasing the limit.
     pub fn decrease_factor(self, factor: f64) -> Self {
         assert!((0.5..1.0).contains(&factor));
         Self {
@@ -72,6 +75,7 @@ impl Aimd {
         }
     }
 
+    /// Set the increment which will be applied when increasing the limit.
     pub fn increase_by(self, increase: usize) -> Self {
         assert!(increase > 0);
         Self {
@@ -80,6 +84,7 @@ impl Aimd {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn with_max_limit(self, max: usize) -> Self {
         assert!(max > 0);
         Self {
@@ -151,7 +156,7 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::Limiter;
+    use crate::{DefaultLimiter, Limiter};
 
     use super::*;
 
@@ -163,7 +168,7 @@ mod tests {
 
         let release_notifier = Arc::new(Notify::new());
 
-        let limiter = Limiter::new(aimd).with_release_notifier(release_notifier.clone());
+        let limiter = DefaultLimiter::new(aimd).with_release_notifier(release_notifier.clone());
 
         let token = limiter.try_acquire().await.unwrap();
         limiter.release(token, Some(Outcome::Overload)).await;
@@ -178,7 +183,7 @@ mod tests {
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
 
-        let limiter = Limiter::new(aimd);
+        let limiter = DefaultLimiter::new(aimd);
 
         let token = limiter.try_acquire().await.unwrap();
         let _token = limiter.try_acquire().await.unwrap();
@@ -195,7 +200,7 @@ mod tests {
             .increase_by(1)
             .with_min_utilisation_threshold(0.5);
 
-        let limiter = Limiter::new(aimd);
+        let limiter = DefaultLimiter::new(aimd);
 
         let token = limiter.try_acquire().await.unwrap();
 
@@ -209,7 +214,7 @@ mod tests {
             .decrease_factor(0.5)
             .increase_by(1);
 
-        let limiter = Limiter::new(aimd);
+        let limiter = DefaultLimiter::new(aimd);
 
         let token = limiter.try_acquire().await.unwrap();
         limiter.release(token, None).await;

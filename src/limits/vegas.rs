@@ -68,6 +68,7 @@ impl Vegas {
     /// Utilisation needs to be above this to increase the limit.
     const DEFAULT_INCREASE_MIN_UTILISATION: f64 = 0.8;
 
+    #[allow(missing_docs)]
     pub fn new_with_initial_limit(initial_limit: usize) -> Self {
         Self::new(
             initial_limit,
@@ -75,6 +76,7 @@ impl Vegas {
         )
     }
 
+    #[allow(missing_docs)]
     pub fn new(initial_limit: usize, limit_range: RangeInclusive<usize>) -> Self {
         assert!(*limit_range.start() >= 1, "Limits must be at least 1");
         assert!(
@@ -104,6 +106,7 @@ impl Vegas {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn with_max_limit(self, max: usize) -> Self {
         assert!(max > 0);
         Self {
@@ -231,7 +234,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{Limiter, Outcome};
+    use crate::{DefaultLimiter, Limiter, Outcome};
 
     use super::*;
 
@@ -240,7 +243,7 @@ mod tests {
         static INIT_LIMIT: usize = 10;
         let vegas = Vegas::new_with_initial_limit(INIT_LIMIT);
 
-        let limiter = Limiter::new(vegas);
+        let limiter = DefaultLimiter::new(vegas);
 
         /*
          * Warm up
@@ -310,7 +313,7 @@ mod tests {
         .with_min_window(Duration::ZERO)
         .with_max_window(Duration::ZERO);
 
-        let limiter = Limiter::new(vegas);
+        let limiter = DefaultLimiter::new(vegas);
 
         let mut next_tokens = VecDeque::with_capacity(9);
 
