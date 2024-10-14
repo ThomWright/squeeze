@@ -12,7 +12,10 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{limits::LimitAlgorithm, DefaultLimiter, Limiter, Outcome, Token};
+use crate::{
+    limiter::{DefaultLimiter, Limiter, Outcome, Token},
+    limits::LimitAlgorithm,
+};
 
 use super::{
     token::{self, TokenInner},
@@ -47,48 +50,47 @@ pub struct PartitionedLimiter<L> {
     limiter: Arc<DefaultLimiter<L>>,
 }
 
-/// Create some partitions with the given relative weights.
-///
-/// The provided weights will be normalised. E.g. weights of 2, 2 and 4 will result in
-/// partitions of 25%, 25% and 50% of the total limit, respectively.
-///
-/// `weights` must not be empty.
-pub fn create_static_partitions<L: LimitAlgorithm + Sync>(
-    limit_algo: L,
-    weights: Vec<f64>,
-) -> Vec<PartitionedLimiter<L>> {
-    assert!(!weights.is_empty(), "Must provide at least one weight");
+impl<L: LimitAlgorithm + Sync> DefaultLimiter<L> {
+    /// Divide up this limiter into a set of partitions with the given relative weights.
+    ///
+    /// The provided weights will be normalised. E.g. weights of 2, 2 and 4 will result in
+    /// partitions of 25%, 25% and 50% of the total limit, respectively.
+    ///
+    /// `weights` must not be empty.
+    pub fn create_static_partitions(self, weights: Vec<f64>) -> Vec<PartitionedLimiter<L>> {
+        assert!(!weights.is_empty(), "Must provide at least one weight");
 
-    let total: f64 = weights.iter().sum();
+        let total: f64 = weights.iter().sum();
 
-    let mut partition_states = Vec::with_capacity(weights.len());
+        let mut partition_states = Vec::with_capacity(weights.len());
 
-    for weight in weights {
-        let fraction = weight / total;
+        for weight in weights {
+            let fraction = weight / total;
 
-        partition_states.push(PartitionState {
-            fraction,
-            in_flight: Arc::new(AtomicCapacityUnit::new(0)),
+            partition_states.push(PartitionState {
+                fraction,
+                in_flight: Arc::new(AtomicCapacityUnit::new(0)),
+            });
+        }
+
+        let shared_limiter = Arc::new(self);
+        let scheduler = Arc::new(Scheduler {
+            total_in_flight: shared_limiter.in_flight_shared(),
+            partition_states,
+            waiters: RwLock::default(),
         });
+
+        let mut partitions = Vec::with_capacity(scheduler.partition_states.len());
+        for _ in scheduler.partition_states.iter() {
+            partitions.push(PartitionedLimiter {
+                index: partitions.len(),
+                scheduler: scheduler.clone(),
+                limiter: shared_limiter.clone(),
+            });
+        }
+
+        partitions
     }
-
-    let shared_limiter = Arc::new(DefaultLimiter::new(limit_algo));
-    let scheduler = Arc::new(Scheduler {
-        total_in_flight: shared_limiter.in_flight_shared(),
-        partition_states,
-        waiters: RwLock::default(),
-    });
-
-    let mut partitions = Vec::with_capacity(scheduler.partition_states.len());
-    for _ in scheduler.partition_states.iter() {
-        partitions.push(PartitionedLimiter {
-            index: partitions.len(),
-            scheduler: scheduler.clone(),
-            limiter: shared_limiter.clone(),
-        });
-    }
-
-    partitions
 }
 
 impl Scheduler {

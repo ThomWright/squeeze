@@ -8,11 +8,6 @@ use doc_comment::doctest;
 doctest!("../README.md");
 
 pub mod aggregation;
-mod limiter;
+pub mod limiter;
 pub mod limits;
 mod moving_avg;
-
-pub use limiter::{
-    create_static_partitions, DefaultLimiter, Limiter, LimiterState, Outcome, PartitionedLimiter,
-    RejectionDelay, Token,
-};

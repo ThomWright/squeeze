@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::{limits::defaults, Outcome};
+use crate::{limiter::Outcome, limits::defaults};
 
 use super::{aimd::multiplicative_decrease, defaults::MIN_SAMPLE_LATENCY, LimitAlgorithm, Sample};
 
@@ -234,7 +234,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{DefaultLimiter, Limiter, Outcome};
+    use crate::limiter::{DefaultLimiter, Limiter, Outcome};
 
     use super::*;
 

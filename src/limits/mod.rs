@@ -10,7 +10,7 @@ mod windowed;
 use async_trait::async_trait;
 use std::time::Duration;
 
-use crate::Outcome;
+use crate::limiter::Outcome;
 
 pub use aimd::Aimd;
 pub use fixed::Fixed;

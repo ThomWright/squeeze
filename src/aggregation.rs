@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 
 use conv::ConvUtil;
 
-use crate::{limits::Sample, Outcome};
+use crate::{limiter::Outcome, limits::Sample};
 
 /// Aggregates multiple samples into one.
 ///

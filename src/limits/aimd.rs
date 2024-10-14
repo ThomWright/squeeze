@@ -6,7 +6,7 @@ use std::{
 use async_trait::async_trait;
 use conv::ConvAsUtil;
 
-use crate::{limits::Sample, Outcome};
+use crate::{limiter::Outcome, limits::Sample};
 
 use super::{defaults, LimitAlgorithm};
 
@@ -156,7 +156,7 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::{DefaultLimiter, Limiter};
+    use crate::limiter::{DefaultLimiter, Limiter};
 
     use super::*;
 

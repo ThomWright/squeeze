@@ -160,7 +160,7 @@ impl LimitAlgorithm for Gradient {
 mod tests {
     use std::time::Duration;
 
-    use crate::{DefaultLimiter, Limiter, Outcome};
+    use crate::limiter::{DefaultLimiter, Limiter, Outcome};
 
     use super::*;
 

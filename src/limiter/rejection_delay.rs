@@ -61,7 +61,10 @@ mod tests {
     use tokio::time::Instant;
 
     use crate::assert_elapsed;
-    use crate::{limits::Fixed, DefaultLimiter, Limiter, RejectionDelay};
+    use crate::{
+        limiter::{DefaultLimiter, Limiter, RejectionDelay},
+        limits::Fixed,
+    };
 
     #[tokio::test]
     async fn on_rejection_delay_acquire() {

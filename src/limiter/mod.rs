@@ -1,3 +1,5 @@
+//! Limiters, including various wrappers.
+
 use std::{
     cmp,
     fmt::Debug,
@@ -15,7 +17,7 @@ use tokio::{
     time::timeout,
 };
 
-pub use partitioning::{create_static_partitions, PartitionedLimiter};
+pub use partitioning::PartitionedLimiter;
 pub use rejection_delay::RejectionDelay;
 pub use token::Token;
 
@@ -277,7 +279,10 @@ impl Outcome {
 
 #[cfg(test)]
 mod tests {
-    use crate::{limits::Fixed, DefaultLimiter, Limiter, Outcome};
+    use crate::{
+        limiter::{DefaultLimiter, Limiter, Outcome},
+        limits::Fixed,
+    };
 
     #[tokio::test]
     async fn it_works() {

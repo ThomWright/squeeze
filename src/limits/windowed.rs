@@ -138,7 +138,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{aggregation::Average, limits::Vegas, Outcome};
+    use crate::{aggregation::Average, limiter::Outcome, limits::Vegas};
 
     use super::*;
 
