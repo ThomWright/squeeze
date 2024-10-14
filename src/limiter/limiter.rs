@@ -10,11 +10,13 @@ use std::{
 use async_trait::async_trait;
 use conv::ValueFrom;
 use tokio::{
-    sync::{Semaphore, SemaphorePermit, TryAcquireError},
-    time::{timeout, Instant},
+    sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError},
+    time::timeout,
 };
 
 use crate::limits::{LimitAlgorithm, Sample};
+
+use super::Token;
 
 /// Limits the number of concurrent jobs.
 ///
@@ -28,12 +30,12 @@ pub trait Limiter {
     /// Try to immediately acquire a concurrency [Token].
     ///
     /// Returns `None` if there are none available.
-    async fn try_acquire(&self) -> Option<Token<'_>>;
+    async fn try_acquire(&self) -> Option<Token>;
 
     /// Try to acquire a concurrency [Token], waiting for `duration` if there are none available.
     ///
     /// Returns `None` if there are none available after `duration`.
-    async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>>;
+    async fn acquire_timeout(&self, duration: Duration) -> Option<Token>;
 
     /// Return the concurrency [Token], along with the outcome of the job.
     ///
@@ -44,15 +46,17 @@ pub trait Limiter {
     ///
     /// Returns the new limit.
     /// // TODO: do we need to return the new limit?
-    async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) -> usize;
+    async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize;
 }
 
 /// A basic limiter.
-#[derive(Debug, Clone)]
+///
+/// Cheaply cloneable.
+#[derive(Debug)]
 pub struct DefaultLimiter<T> {
     limit_algo: T,
     semaphore: Arc<Semaphore>,
-    limit: Arc<AtomicUsize>,
+    limit: AtomicUsize,
 
     /// Best-effort
     in_flight: Arc<AtomicUsize>,
@@ -62,18 +66,6 @@ pub struct DefaultLimiter<T> {
 
     #[cfg(test)]
     notifier: Option<Arc<tokio::sync::Notify>>,
-}
-
-/// A concurrency token, required to run a job.
-///
-/// Release the token back to the [Limiter] after the job is complete.
-#[derive(Debug)]
-pub struct Token<'t> {
-    _permit: SemaphorePermit<'t>,
-    start: Instant,
-    #[cfg(test)]
-    latency: Duration,
-    in_flight: Vec<Arc<AtomicUsize>>,
 }
 
 /// A snapshot of the state of the [Limiter].
@@ -109,7 +101,7 @@ where
         Self {
             limit_algo,
             semaphore: Arc::new(Semaphore::new(initial_permits)),
-            limit: Arc::new(AtomicUsize::new(initial_permits)),
+            limit: AtomicUsize::new(initial_permits),
             in_flight: Arc::new(AtomicUsize::new(0)),
 
             rejection_delay: None,
@@ -134,19 +126,9 @@ where
         self
     }
 
-    #[cfg(test)]
-    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
+    fn new_sample(&self, latency: Duration, outcome: Outcome) -> Sample {
         Sample {
-            latency: token.latency,
-            in_flight: self.in_flight(),
-            outcome,
-        }
-    }
-
-    #[cfg(not(test))]
-    fn new_sample(&self, token: &Token<'_>, outcome: Outcome) -> Sample {
-        Sample {
-            latency: token.start.elapsed(),
+            latency,
             in_flight: self.in_flight(),
             outcome,
         }
@@ -164,6 +146,10 @@ where
         self.in_flight.load(Ordering::Acquire)
     }
 
+    pub(crate) fn in_flight_shared(&self) -> Arc<AtomicUsize> {
+        self.in_flight.clone()
+    }
+
     /// The current state of the limiter.
     pub fn state(&self) -> LimiterState {
         LimiterState {
@@ -178,6 +164,10 @@ where
             tokio::time::sleep(delay).await;
         }
     }
+
+    pub(crate) fn mint_token(&self, permit: OwnedSemaphorePermit) -> Token {
+        Token::new(permit, self.in_flight.clone())
+    }
 }
 
 #[async_trait]
@@ -185,9 +175,9 @@ impl<T> Limiter for DefaultLimiter<T>
 where
     T: LimitAlgorithm + Sync,
 {
-    async fn try_acquire(&self) -> Option<Token<'_>> {
-        match self.semaphore.try_acquire() {
-            Ok(permit) => Some(Token::new(permit).with_in_flight(self.in_flight.clone())),
+    async fn try_acquire(&self) -> Option<Token> {
+        match Arc::clone(&self.semaphore).try_acquire_owned() {
+            Ok(permit) => Some(self.mint_token(permit)),
             Err(TryAcquireError::NoPermits) => {
                 self.on_rejection().await;
                 None
@@ -198,9 +188,9 @@ where
         }
     }
 
-    async fn acquire_timeout(&self, duration: Duration) -> Option<Token<'_>> {
-        match timeout(duration, self.semaphore.acquire()).await {
-            Ok(Ok(permit)) => Some(Token::new(permit).with_in_flight(self.in_flight.clone())),
+    async fn acquire_timeout(&self, duration: Duration) -> Option<Token> {
+        match timeout(duration, Arc::clone(&self.semaphore).acquire_owned()).await {
+            Ok(Ok(permit)) => Some(self.mint_token(permit)),
             Err(_) => {
                 self.on_rejection().await;
                 None
@@ -212,9 +202,9 @@ where
         }
     }
 
-    async fn release(&self, token: Token<'_>, outcome: Option<Outcome>) -> usize {
+    async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize {
         let limit = if let Some(outcome) = outcome {
-            let sample = self.new_sample(&token, outcome);
+            let sample = self.new_sample(token.latency(), outcome);
 
             let new_limit = self.limit_algo.update(sample).await;
 
@@ -271,41 +261,6 @@ where
         drop(token);
 
         limit
-    }
-}
-
-impl<'t> Token<'t> {
-    fn new(permit: SemaphorePermit<'t>) -> Self {
-        Self {
-            _permit: permit,
-            start: Instant::now(),
-            #[cfg(test)]
-            latency: Duration::ZERO,
-            in_flight: vec![],
-        }
-    }
-
-    pub(crate) fn with_in_flight(mut self, in_flight: Arc<AtomicUsize>) -> Self {
-        in_flight.fetch_add(1, Ordering::SeqCst);
-        self.in_flight.push(in_flight);
-        self
-    }
-
-    #[cfg(test)]
-    pub fn set_latency(&mut self, latency: Duration) {
-        use std::ops::Sub;
-
-        self.start = Instant::now().sub(latency);
-        self.latency = latency;
-    }
-}
-
-impl Drop for Token<'_> {
-    /// Reduces the number of jobs in flight and releases the token back to the available pool.
-    fn drop(&mut self) {
-        for in_flight in self.in_flight.iter() {
-            in_flight.fetch_sub(1, Ordering::SeqCst);
-        }
     }
 }
 

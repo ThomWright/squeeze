@@ -11,7 +11,8 @@ pub mod aggregation;
 mod limiter;
 pub mod limits;
 mod moving_avg;
-mod partitioning;
 
-pub use limiter::{DefaultLimiter, Limiter, LimiterState, Outcome, Token};
-pub use partitioning::{Partition, PartitionedLimiter};
+pub use limiter::{
+    create_static_partitions, DefaultLimiter, Limiter, LimiterState, Outcome, PartitionedLimiter,
+    Token,
+};

@@ -70,16 +70,16 @@ struct LatencyProfile {
 }
 
 #[derive(Debug)]
-struct LimiterToken<'t> {
-    token: Token<'t>,
+struct LimiterToken {
+    token: Token,
 
     /// Limiter state just after the request started.
     limit_state: LimiterState,
 }
 
-struct ServerResponse<'t> {
+struct ServerResponse {
     latency: Duration,
-    server_state: Option<LimiterToken<'t>>,
+    server_state: Option<LimiterToken>,
 }
 
 struct RequestOutcome {
@@ -91,12 +91,12 @@ struct RequestOutcome {
 
 /// Processed by a [`Simulation`].
 #[derive(Debug)]
-struct Event<'t> {
+struct Event {
     time: Instant,
-    typ: Action<'t>,
+    typ: Action,
 }
 #[derive(Debug)]
-enum Action<'t> {
+enum Action {
     StartRequest {
         client_id: Id,
     },
@@ -104,8 +104,8 @@ enum Action<'t> {
         start_time: Instant,
         client_id: Id,
         server_id: Id,
-        client: Option<LimiterToken<'t>>,
-        server: Option<LimiterToken<'t>>,
+        client: Option<LimiterToken>,
+        server: Option<LimiterToken>,
     },
 }
 
@@ -196,7 +196,7 @@ impl Client {
     }
 
     /// Receive a response.
-    async fn res(&self, token: Token<'_>, result: Outcome) -> RequestOutcome {
+    async fn res(&self, token: Token, result: Outcome) -> RequestOutcome {
         let limiter = self
             .limiter
             .as_ref()
@@ -256,7 +256,7 @@ impl Server {
     }
 
     /// Return a response.
-    async fn res(&self, token: Token<'_>, rng: &mut SmallRng) -> RequestOutcome {
+    async fn res(&self, token: Token, rng: &mut SmallRng) -> RequestOutcome {
         let limiter = self
             .limiter
             .as_ref()
@@ -287,18 +287,18 @@ impl From<LatencyProfile> for Erlang {
     }
 }
 
-impl PartialEq for Event<'_> {
+impl PartialEq for Event {
     fn eq(&self, other: &Self) -> bool {
         self.time.eq(&other.time)
     }
 }
-impl Eq for Event<'_> {}
-impl PartialOrd for Event<'_> {
+impl Eq for Event {}
+impl PartialOrd for Event {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for Event<'_> {
+impl Ord for Event {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.time.cmp(&other.time)
     }
