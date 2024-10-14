@@ -1,5 +1,6 @@
 use std::{
     cmp,
+    fmt::Debug,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -15,11 +16,13 @@ use tokio::{
 };
 
 pub use partitioning::{create_static_partitions, PartitionedLimiter};
+pub use rejection_delay::RejectionDelay;
 pub use token::Token;
 
 use crate::limits::{LimitAlgorithm, Sample};
 
 mod partitioning;
+mod rejection_delay;
 mod token;
 
 /// Limits the number of concurrent jobs.
@@ -30,7 +33,7 @@ mod token;
 /// The limit will be automatically adjusted based on observed latency (delay) and/or failures
 /// caused by overload (loss).
 #[async_trait]
-pub trait Limiter {
+pub trait Limiter: Debug + Sync {
     /// Try to immediately acquire a concurrency [Token].
     ///
     /// Returns `None` if there are none available.
@@ -49,7 +52,7 @@ pub trait Limiter {
     /// Set the outcome to `None` to ignore the job.
     ///
     /// Returns the new limit.
-    /// // TODO: do we need to return the new limit?
+    /// TODO: do we need to return the new limit?
     async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize;
 }
 
@@ -64,9 +67,6 @@ pub struct DefaultLimiter<T> {
 
     /// Best-effort
     in_flight: Arc<AtomicUsize>,
-
-    // TODO: Turn rejection delay into a wrapper?
-    rejection_delay: Option<Duration>,
 
     #[cfg(test)]
     notifier: Option<Arc<tokio::sync::Notify>>,
@@ -108,19 +108,9 @@ where
             limit: AtomicUsize::new(initial_permits),
             in_flight: Arc::new(AtomicUsize::new(0)),
 
-            rejection_delay: None,
-
             #[cfg(test)]
             notifier: None,
         }
-    }
-
-    /// When rejecting a request, wait a while before returning the rejection.
-    ///
-    /// This can help reduce the rate of retries.
-    pub fn with_rejection_delay(mut self, delay: Duration) -> Self {
-        self.rejection_delay = Some(delay);
-        self
     }
 
     /// In some cases [Token]s are acquired asynchronously when updating the limit.
@@ -163,12 +153,6 @@ where
         }
     }
 
-    pub(crate) async fn on_rejection(&self) {
-        if let Some(delay) = self.rejection_delay {
-            tokio::time::sleep(delay).await;
-        }
-    }
-
     pub(crate) fn mint_token(&self, permit: OwnedSemaphorePermit) -> Token {
         Token::new(permit, self.in_flight.clone())
     }
@@ -177,15 +161,13 @@ where
 #[async_trait]
 impl<T> Limiter for DefaultLimiter<T>
 where
-    T: LimitAlgorithm + Sync,
+    T: LimitAlgorithm + Sync + Debug,
 {
     async fn try_acquire(&self) -> Option<Token> {
         match Arc::clone(&self.semaphore).try_acquire_owned() {
             Ok(permit) => Some(self.mint_token(permit)),
-            Err(TryAcquireError::NoPermits) => {
-                self.on_rejection().await;
-                None
-            }
+            Err(TryAcquireError::NoPermits) => None,
+
             Err(TryAcquireError::Closed) => {
                 panic!("we own the semaphore, we shouldn't have closed it")
             }
@@ -195,10 +177,7 @@ where
     async fn acquire_timeout(&self, duration: Duration) -> Option<Token> {
         match timeout(duration, Arc::clone(&self.semaphore).acquire_owned()).await {
             Ok(Ok(permit)) => Some(self.mint_token(permit)),
-            Err(_) => {
-                self.on_rejection().await;
-                None
-            }
+            Err(_) => None,
 
             Ok(Err(_)) => {
                 panic!("we own the semaphore, we shouldn't have closed it")
@@ -295,9 +274,6 @@ impl Outcome {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
-    use crate::assert_elapsed;
     use crate::{limits::Fixed, DefaultLimiter, Limiter, Outcome};
 
     #[tokio::test]
@@ -309,52 +285,5 @@ mod tests {
         limiter.release(token, Some(Outcome::Success)).await;
 
         assert_eq!(limiter.limit(), 10);
-    }
-
-    #[tokio::test]
-    async fn on_rejection_delay_acquire() {
-        let delay = Duration::from_millis(50);
-
-        let limiter = DefaultLimiter::new(Fixed::new(1)).with_rejection_delay(delay);
-
-        let _token = limiter.try_acquire().await.unwrap();
-
-        let now = Instant::now();
-        let token = limiter.try_acquire().await;
-
-        assert!(token.is_none());
-        assert_elapsed!(now, delay, Duration::from_millis(10));
-    }
-
-    #[tokio::test]
-    async fn on_rejection_delay_acquire_timeout() {
-        let delay = Duration::from_millis(50);
-
-        let limiter = DefaultLimiter::new(Fixed::new(1)).with_rejection_delay(delay);
-
-        let _token = limiter.try_acquire().await.unwrap();
-
-        let now = Instant::now();
-        let token = limiter.acquire_timeout(Duration::ZERO).await;
-
-        assert!(token.is_none());
-        assert_elapsed!(now, delay, Duration::from_millis(10));
-    }
-
-    #[macro_export]
-    #[cfg(test)]
-    macro_rules! assert_elapsed {
-        ($start:expr, $dur:expr, $tolerance:expr) => {{
-            let elapsed = $start.elapsed();
-            let lower: std::time::Duration = $dur;
-
-            // Handles ms rounding
-            assert!(
-                elapsed >= lower && elapsed <= lower + $tolerance,
-                "actual = {:?}, expected = {:?}",
-                elapsed,
-                lower
-            );
-        }};
     }
 }

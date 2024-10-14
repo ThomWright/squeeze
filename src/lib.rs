@@ -14,5 +14,5 @@ mod moving_avg;
 
 pub use limiter::{
     create_static_partitions, DefaultLimiter, Limiter, LimiterState, Outcome, PartitionedLimiter,
-    Token,
+    RejectionDelay, Token,
 };

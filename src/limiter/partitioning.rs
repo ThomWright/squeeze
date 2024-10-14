@@ -1,5 +1,6 @@
 use std::{
     collections::LinkedList,
+    fmt::Debug,
     sync::{
         atomic::{self, AtomicUsize},
         Arc,
@@ -17,22 +18,6 @@ use tokio::{
 use crate::{limits::LimitAlgorithm, DefaultLimiter, Limiter, Outcome, Token};
 
 use super::token::{self, TokenInner};
-
-/// Creates a set of partitioned limiters, sharing the total capacity between them.
-///
-/// Each partition can use some fraction of the total concurrency limit.
-///
-/// Each partition can use more than its allotted fraction when there is spare capacity.
-///
-/// Note that each limiter has a minimum limit of 1. So the total concurrency might exceed the total
-/// limit. E.g. when the limit is one and we have two limiters, two jobs can be being processed
-/// concurrently.
-// #[derive(Debug)]
-// pub struct Partitioner<L> {
-//     limiter: DefaultLimiter<L>,
-
-//     thing: Scheduler,
-// }
 
 #[derive(Debug)]
 pub(crate) struct Scheduler {
@@ -136,76 +121,6 @@ impl Scheduler {
     }
 }
 
-// impl<L: LimitAlgorithm + Sync> Partitioner<L> {
-//     /// Create a partitioned limiter with a given limit control algorithm.
-//     pub fn new(limit_algo: L) -> Self {
-//         Self {
-//             limiter: DefaultLimiter::new(limit_algo),
-//             thing: Scheduler {
-//                 partition_states: vec![],
-//                 waiters: RwLock::new(LinkedList::new()),
-//             },
-//         }
-//     }
-
-//     // async fn try_acquire(&self, index: usize) -> Option<Token> {
-//     //     let state = &self.partition_states[index];
-
-//     //     let total_limit = self.limiter.limit();
-//     //     if state.in_flight() < state.limit(total_limit) || self.spare() > 0 {
-//     //         self.limiter
-//     //             .try_acquire()
-//     //             .await
-//     //             .map(|token| token.with_in_flight(state.in_flight.clone()))
-//     //     } else {
-//     //         self.limiter.on_rejection().await;
-//     //         None
-//     //     }
-//     // }
-
-//     // async fn acquire_timeout(&self, duration: Duration, index: usize) -> Option<Token> {
-//     //     let state = &self.partition_states[index];
-//     //     match timeout(duration, async {
-//     //         let total_limit = self.limiter.limit();
-//     //         if state.in_flight() < state.limit(total_limit) || self.spare() > 0 {
-//     //             self.limiter
-//     //                 .try_acquire()
-//     //                 .await
-//     //                 .map(|token| token.with_in_flight(state.in_flight.clone()))
-//     //         } else {
-//     //             let (snd, rx) = oneshot::channel();
-//     //             let mut waiters = self.waiters.write().await;
-//     //             waiters.push_back(snd);
-//     //             match rx.await {
-//     //                 Ok(token) => Some(token),
-//     //                 Err(_) => None,
-//     //             }
-//     //         }
-//     //     })
-//     //     .await
-//     //     {
-//     //         Ok(Some(token)) => Some(token.with_in_flight(state.in_flight.clone())),
-//     //         Err(_) => {
-//     //             self.limiter.on_rejection().await;
-//     //             None
-//     //         }
-//     //         Ok(None) => {
-//     //             self.limiter.on_rejection().await;
-//     //             None
-//     //         }
-//     //     }
-//     // }
-
-//     // async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize {
-//     //     self.limiter.release(token, outcome).await
-//     // }
-
-//     fn fraction(&self, index: usize) -> f64 {
-//         self.partition_states[index].fraction
-//     }
-
-// }
-
 impl PartitionState {
     const BUFFER_FRACTION: f64 = 0.1;
 
@@ -231,22 +146,8 @@ impl PartitionState {
 #[async_trait]
 impl<L> Limiter for PartitionedLimiter<L>
 where
-    L: LimitAlgorithm + Sync + Send,
+    L: LimitAlgorithm + Sync + Send + Debug,
 {
-    // async fn try_acquire(&self) -> Option<Token> {
-    //     self.inner.try_acquire(self.index).await
-    // }
-
-    // async fn acquire_timeout(&self, duration: Duration) -> Option<Token> {
-    //     self.inner.acquire_timeout(duration, self.index).await
-    // }
-
-    // async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize {
-    //     let new_limit = self.inner.release(token, outcome).await;
-
-    //     fractional_limit(new_limit, self.inner.fraction(self.index))
-    // }
-
     async fn try_acquire(&self) -> Option<Token> {
         let state = &self.scheduler.partition_states[self.index];
 
@@ -259,7 +160,6 @@ where
                 ))
             })
         } else {
-            self.limiter.on_rejection().await;
             None
         }
     }
@@ -287,14 +187,8 @@ where
                 state.in_flight.clone(),
                 self.scheduler.clone(),
             ))),
-            Err(_) => {
-                self.limiter.on_rejection().await;
-                None
-            }
-            Ok(None) => {
-                self.limiter.on_rejection().await;
-                None
-            }
+            Err(_) => None,
+            Ok(None) => None,
         }
     }
 

@@ -25,7 +25,7 @@ pub struct Token {
 
 #[derive(Debug)]
 pub(crate) struct TokenInner {
-    permit: OwnedSemaphorePermit,
+    _permit: OwnedSemaphorePermit,
     in_flight: Arc<AtomicUsize>,
 }
 
@@ -39,7 +39,10 @@ impl Token {
     pub(crate) fn new(permit: OwnedSemaphorePermit, in_flight: Arc<AtomicUsize>) -> Self {
         in_flight.fetch_add(1, atomic::Ordering::SeqCst);
         Self {
-            inner: Some(TokenInner { permit, in_flight }),
+            inner: Some(TokenInner {
+                _permit: permit,
+                in_flight,
+            }),
             partition: None,
             start: Instant::now(),
             #[cfg(test)]
@@ -62,17 +65,6 @@ impl Token {
         self.partition = Some(partition);
         self
     }
-
-    // pub(crate) fn with_in_flight(mut self, in_flight: Arc<AtomicUsize>) -> Self {
-    //     in_flight.fetch_add(1, atomic::Ordering::SeqCst);
-    //     self.in_flight.push(in_flight);
-    //     self
-    // }
-
-    // pub(crate) fn with_scheduler(mut self, scheduler: Arc<Scheduler>) -> Self {
-    //     self.scheduler = Some(scheduler);
-    //     self
-    // }
 
     #[cfg(test)]
     pub(crate) fn set_latency(&mut self, latency: Duration) {
