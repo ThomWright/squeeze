@@ -1,10 +1,7 @@
 use std::{
     collections::LinkedList,
     fmt::Debug,
-    sync::{
-        atomic::{self, AtomicUsize},
-        Arc,
-    },
+    sync::{atomic, Arc},
     time::Duration,
 };
 
@@ -17,29 +14,34 @@ use tokio::{
 
 use crate::{limits::LimitAlgorithm, DefaultLimiter, Limiter, Outcome, Token};
 
-use super::token::{self, TokenInner};
+use super::{
+    token::{self, TokenInner},
+    AtomicCapacityUnit, CapacityUnit,
+};
+
+type StateIndex = usize;
 
 #[derive(Debug)]
 pub(crate) struct Scheduler {
-    total_in_flight: Arc<AtomicUsize>,
+    total_in_flight: Arc<AtomicCapacityUnit>,
 
     partition_states: Vec<PartitionState>,
 
-    waiters: RwLock<LinkedList<(usize, oneshot::Sender<Token>)>>,
+    waiters: RwLock<LinkedList<(StateIndex, oneshot::Sender<Token>)>>,
 }
 
 #[derive(Debug)]
 struct PartitionState {
     fraction: f64,
     /// Shared with [Token]s.
-    in_flight: Arc<AtomicUsize>,
+    in_flight: Arc<AtomicCapacityUnit>,
 }
 
 /// A partition, using some fraction of the concurrency limit.
 #[derive(Debug)]
 pub struct PartitionedLimiter<L> {
     /// Partition state used for scheduling is stored at this index in the [Scheduler].
-    index: usize,
+    index: StateIndex,
 
     scheduler: Arc<Scheduler>,
     limiter: Arc<DefaultLimiter<L>>,
@@ -66,7 +68,7 @@ pub fn create_static_partitions<L: LimitAlgorithm + Sync>(
 
         partition_states.push(PartitionState {
             fraction,
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            in_flight: Arc::new(AtomicCapacityUnit::new(0)),
         });
     }
 
@@ -114,7 +116,7 @@ impl Scheduler {
     }
 
     /// Total spare capacity which can be used by any partition.
-    fn spare(&self, total_limit: usize) -> usize {
+    fn spare(&self, total_limit: CapacityUnit) -> CapacityUnit {
         self.partition_states
             .iter()
             .fold(0, |total, partition| total + partition.spare(total_limit))
@@ -124,20 +126,20 @@ impl Scheduler {
 impl PartitionState {
     const BUFFER_FRACTION: f64 = 0.1;
 
-    fn limit(&self, total_limit: usize) -> usize {
+    fn limit(&self, total_limit: CapacityUnit) -> CapacityUnit {
         fractional_limit(total_limit, self.fraction)
     }
 
-    fn in_flight(&self) -> usize {
+    fn in_flight(&self) -> CapacityUnit {
         self.in_flight.load(atomic::Ordering::SeqCst)
     }
 
     /// Spare capacity which can be used by other partitions.
-    fn spare(&self, total_limit: usize) -> usize {
+    fn spare(&self, total_limit: CapacityUnit) -> CapacityUnit {
         let partition_limit = self.limit(total_limit);
         let buffer = (partition_limit as f64 * Self::BUFFER_FRACTION)
             .ceil()
-            .approx_as::<usize>()
+            .approx_as::<CapacityUnit>()
             .expect("should be < usize::MAX");
         (partition_limit - self.in_flight()).saturating_sub(buffer)
     }
@@ -192,12 +194,12 @@ where
         }
     }
 
-    async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize {
+    async fn release(&self, token: Token, outcome: Option<Outcome>) -> CapacityUnit {
         self.limiter.release(token, outcome).await
     }
 }
 
-fn fractional_limit(limit: usize, fraction: f64) -> usize {
+fn fractional_limit(limit: CapacityUnit, fraction: f64) -> CapacityUnit {
     let limit_f64 = limit as f64 * fraction;
 
     limit_f64

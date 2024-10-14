@@ -25,6 +25,9 @@ mod partitioning;
 mod rejection_delay;
 mod token;
 
+type CapacityUnit = usize;
+type AtomicCapacityUnit = AtomicUsize;
+
 /// Limits the number of concurrent jobs.
 ///
 /// Concurrency is limited through the use of [Token]s. Acquire a token to run a job, and release the
@@ -53,7 +56,7 @@ pub trait Limiter: Debug + Sync {
     ///
     /// Returns the new limit.
     /// TODO: do we need to return the new limit?
-    async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize;
+    async fn release(&self, token: Token, outcome: Option<Outcome>) -> CapacityUnit;
 }
 
 /// A basic limiter.
@@ -63,10 +66,10 @@ pub trait Limiter: Debug + Sync {
 pub struct DefaultLimiter<T> {
     limit_algo: T,
     semaphore: Arc<Semaphore>,
-    limit: AtomicUsize,
+    limit: AtomicCapacityUnit,
 
     /// Best-effort
-    in_flight: Arc<AtomicUsize>,
+    in_flight: Arc<AtomicCapacityUnit>,
 
     #[cfg(test)]
     notifier: Option<Arc<tokio::sync::Notify>>,
@@ -77,9 +80,9 @@ pub struct DefaultLimiter<T> {
 /// Not guaranteed to be consistent under high concurrency.
 #[derive(Debug, Clone, Copy)]
 pub struct LimiterState {
-    limit: usize,
-    available: usize,
-    in_flight: usize,
+    limit: CapacityUnit,
+    available: CapacityUnit,
+    in_flight: CapacityUnit,
 }
 
 /// Whether a job succeeded or failed as a result of congestion/overload.
@@ -105,8 +108,8 @@ where
         Self {
             limit_algo,
             semaphore: Arc::new(Semaphore::new(initial_permits)),
-            limit: AtomicUsize::new(initial_permits),
-            in_flight: Arc::new(AtomicUsize::new(0)),
+            limit: AtomicCapacityUnit::new(initial_permits),
+            in_flight: Arc::new(AtomicCapacityUnit::new(0)),
 
             #[cfg(test)]
             notifier: None,
@@ -128,19 +131,19 @@ where
         }
     }
 
-    fn available(&self) -> usize {
+    fn available(&self) -> CapacityUnit {
         self.semaphore.available_permits()
     }
 
-    pub(crate) fn limit(&self) -> usize {
+    pub(crate) fn limit(&self) -> CapacityUnit {
         self.limit.load(Ordering::Acquire)
     }
 
-    fn in_flight(&self) -> usize {
+    fn in_flight(&self) -> CapacityUnit {
         self.in_flight.load(Ordering::Acquire)
     }
 
-    pub(crate) fn in_flight_shared(&self) -> Arc<AtomicUsize> {
+    pub(crate) fn in_flight_shared(&self) -> Arc<AtomicCapacityUnit> {
         self.in_flight.clone()
     }
 
@@ -185,7 +188,7 @@ where
         }
     }
 
-    async fn release(&self, token: Token, outcome: Option<Outcome>) -> usize {
+    async fn release(&self, token: Token, outcome: Option<Outcome>) -> CapacityUnit {
         let limit = if let Some(outcome) = outcome {
             let sample = self.new_sample(token.latency(), outcome);
 
@@ -249,15 +252,15 @@ where
 
 impl LimiterState {
     /// The current concurrency limit.
-    pub fn limit(&self) -> usize {
+    pub fn limit(&self) -> CapacityUnit {
         self.limit
     }
     /// The amount of concurrency available to use.
-    pub fn available(&self) -> usize {
+    pub fn available(&self) -> CapacityUnit {
         self.available
     }
     /// The number of jobs in flight.
-    pub fn in_flight(&self) -> usize {
+    pub fn in_flight(&self) -> CapacityUnit {
         self.in_flight
     }
 }
