@@ -1,0 +1,109 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        build:
+          - pinned
+          - pinned-win
+          - stable
+          - beta
+          - nightly
+          - macos
+          - win-msvc
+          - win-gnu
+        include:
+          - build: pinned
+            os: ubuntu-22.04
+            rust: 1.74.0
+          - build: pinned-win
+            os: windows-2019
+            rust: 1.74.0
+          - build: stable
+            os: ubuntu-22.04
+            rust: stable
+          - build: beta
+            os: ubuntu-22.04
+            rust: beta
+          - build: nightly
+            os: ubuntu-22.04
+            rust: nightly
+          - build: macos
+            os: macos-latest
+            rust: stable
+          - build: win-msvc
+            os: windows-2019
+            rust: stable
+          - build: win-gnu
+            os: windows-2019
+            rust: stable-x86_64-gnu
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+
+      - run: cargo build --verbose
+      - run: cargo doc --verbose
+      - run: cargo test --verbose -- --test-threads 1
+
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Install stable toolchain with rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          override: true
+
+      - name: Check formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-22.04
+    permissions:
+      checks: write
+    steps:
+      - uses: actions/checkout@v3
+      - run: rustup component add clippy
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features -- --deny warnings
+
+  publish:
+    name: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    needs: [clippy, test]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - uses: katyo/publish-crates@v1
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          ignore-unpublished-changes: true
