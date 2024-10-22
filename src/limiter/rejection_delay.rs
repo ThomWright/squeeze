@@ -74,11 +74,11 @@ mod tests {
 
         let _token = limiter.try_acquire().await.unwrap();
 
-        let now = Instant::now();
+        let before_acquire = Instant::now();
         let token = limiter.try_acquire().await;
 
         assert!(token.is_none());
-        assert_elapsed!(now, delay, Duration::from_millis(10));
+        assert_elapsed!(before_acquire, delay, Duration::from_millis(10));
     }
 
     #[tokio::test]
@@ -89,13 +89,14 @@ mod tests {
 
         let _token = limiter.try_acquire().await.unwrap();
 
-        let now = Instant::now();
+        let before_acquire = Instant::now();
         let token = limiter.acquire_timeout(Duration::ZERO).await;
 
         assert!(token.is_none());
-        assert_elapsed!(now, delay, Duration::from_millis(10));
+        assert_elapsed!(before_acquire, delay, Duration::from_millis(10));
     }
 
+    /// Assert that a given duration has elapsed since `start`, within the given tolerance.
     #[macro_export]
     #[cfg(test)]
     macro_rules! assert_elapsed {
