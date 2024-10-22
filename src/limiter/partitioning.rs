@@ -26,7 +26,7 @@ type StateIndex = usize;
 
 #[derive(Debug)]
 pub(crate) struct Scheduler {
-    total_in_flight: Arc<AtomicCapacityUnit>,
+    _total_in_flight: Arc<AtomicCapacityUnit>,
 
     partition_states: Vec<PartitionState>,
 
@@ -75,7 +75,7 @@ impl<L: LimitAlgorithm + Sync> DefaultLimiter<L> {
 
         let shared_limiter = Arc::new(self);
         let scheduler = Arc::new(Scheduler {
-            total_in_flight: shared_limiter.in_flight_shared(),
+            _total_in_flight: shared_limiter.in_flight_shared(),
             partition_states,
             waiters: RwLock::default(),
         });
@@ -94,9 +94,16 @@ impl<L: LimitAlgorithm + Sync> DefaultLimiter<L> {
 }
 
 impl Scheduler {
+    /// When a permit becomes available, give it to the next job in the queue with the higher
+    /// priority.
+    ///
+    /// The underlying semaphore is simply a FIFO queue. Instead, what we want is to give out tokens
+    /// to jobs in partitions which are under-subscribed in favour of partitions which are
+    /// oversubscribed.
     pub(crate) fn reuse_permit(self: Arc<Scheduler>, token_inner: TokenInner) {
         tokio::spawn(async move {
-            // TODO: a better strategy for choosing which waiter to wake
+            // TODO: A better strategy for choosing which waiter to wake, based on priority.
+            // For now this is just a FIFO queue, so it's kind of pointless!
             let waiter = self.waiters.write().await.pop_front();
             match waiter {
                 Some((index, waiter)) => {

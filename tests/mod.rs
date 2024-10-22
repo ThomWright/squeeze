@@ -11,8 +11,8 @@ use statrs::{
 use tokio::time::Instant;
 
 use squeeze::{
+    limiter::{DefaultLimiter, Limiter, LimiterState, Outcome, Token},
     limits::{Aimd, LimitAlgorithm, Sample},
-    DefaultLimiter, Limiter, LimiterState, Outcome, Token,
 };
 
 mod iter_ext;
@@ -28,6 +28,7 @@ struct Simulation {
 type Id = usize;
 
 /// The limiting algorithms we'll be testing.
+#[derive(Debug)]
 enum LimitWrapper {
     Aimd(Aimd),
 }
