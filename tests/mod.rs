@@ -10,7 +10,7 @@ use statrs::{
 };
 use tokio::time::Instant;
 
-use squeeze::{
+use congestion_limiter::{
     limiter::{DefaultLimiter, Limiter, LimiterState, Outcome, Token},
     limits::{Aimd, LimitAlgorithm, Sample},
 };

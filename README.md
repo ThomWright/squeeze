@@ -1,4 +1,4 @@
-# Squeeze
+# congestion-limiter
 
 Dynamic congestion-based concurrency limits for controlling backpressure.
 
@@ -45,8 +45,6 @@ The example below shows two applications using limiters on the client (output) a
 
 ### Caveats
 
-TODO:
-
 - **Loss-based algorithms require a reliable signal for load-based errors.**
   - If configured to reduce concurrency for non-load-based errors, they can exacerbate availability problems when these errors occur.
 - **Delay-based algorithms work more reliably with predictable latency.**
@@ -70,12 +68,12 @@ TODO:
 
 ```rust
 use std::sync::Arc;
-use squeeze::{limits::Aimd, Limiter, Outcome};
+use congestion_limiter::{limits::Aimd, limiter::{DefaultLimiter, Limiter, Outcome}};
 
 // A limiter shared between request handler invocations.
 // This controls the concurrency of incoming requests.
-let limiter = Arc::new(Limiter::new(
-    Aimd::with_initial_limit(10)
+let limiter = Arc::new(DefaultLimiter::new(
+    Aimd::new_with_initial_limit(10)
         .with_max_limit(20)
         .decrease_factor(0.9)
         .increase_by(1),
