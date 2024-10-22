@@ -1,3 +1,5 @@
+#![expect(dead_code)]
+
 use std::{cmp::Reverse, collections::BinaryHeap, time::Duration};
 
 use async_trait::async_trait;

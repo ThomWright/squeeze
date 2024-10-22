@@ -12,7 +12,7 @@ use super::partitioning::Scheduler;
 
 /// A concurrency token, required to run a job.
 ///
-/// Release the token back to the [Limiter] after the job is complete.
+/// Release the token back to the [Limiter](crate::limiter::Limiter) after the job is complete.
 #[derive(Debug)]
 pub struct Token {
     inner: Option<TokenInner>,
