@@ -58,7 +58,7 @@ impl Limiter for RejectionDelay {
 mod tests {
     use std::time::Duration;
 
-    use tokio::time::Instant;
+    use tokio::time::{self, Instant};
 
     use crate::assert_elapsed;
     use crate::{
@@ -68,7 +68,9 @@ mod tests {
 
     #[tokio::test]
     async fn on_rejection_delay_acquire() {
-        let delay = Duration::from_millis(50);
+        time::pause();
+
+        let delay = Duration::from_millis(5000);
 
         let limiter = RejectionDelay::new(delay, DefaultLimiter::new(Fixed::new(1)));
 
@@ -83,17 +85,19 @@ mod tests {
 
     #[tokio::test]
     async fn on_rejection_delay_acquire_timeout() {
-        let delay = Duration::from_millis(50);
+        time::pause();
+
+        let delay = Duration::from_millis(5000);
 
         let limiter = RejectionDelay::new(delay, DefaultLimiter::new(Fixed::new(1)));
 
         let _token = limiter.try_acquire().await.unwrap();
 
         let before_acquire = Instant::now();
-        let token = limiter.acquire_timeout(Duration::ZERO).await;
+        let token = limiter.acquire_timeout(delay).await;
 
         assert!(token.is_none());
-        assert_elapsed!(before_acquire, delay, Duration::from_millis(10));
+        assert_elapsed!(before_acquire, delay * 2, Duration::from_millis(10));
     }
 
     /// Assert that a given duration has elapsed since `start`, within the given tolerance.
