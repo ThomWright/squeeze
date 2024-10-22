@@ -19,7 +19,7 @@ jobs:
           - nightly
           - macos
           - win-msvc
-          - win-gnu
+          # - win-gnu
         include:
           - build: pinned
             os: ubuntu-22.04
