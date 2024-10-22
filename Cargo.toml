@@ -3,8 +3,16 @@ name = "congestion-limiter"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Thom Wright <dev@thomwright.co.uk>"]
+description = """
+Dynamic congestion-based concurrency limits for controlling backpressure
+"""
+documentation = "https://docs.rs/congestion-limiter"
+homepage = "https://github.com/ThomWright/congestion-limiter"
+repository = "https://github.com/ThomWright/congestion-limiter"
+readme = "README.md"
+keywords = ["concurrency", "congestion", "limiting", "limiter", "backpressure"]
+categories = ["concurrency"]
 
 [dependencies]
 async-trait = "0.1.68"
