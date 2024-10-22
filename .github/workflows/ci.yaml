@@ -23,10 +23,10 @@ jobs:
         include:
           - build: pinned
             os: ubuntu-22.04
-            rust: 1.74.0
+            rust: 1.81.0
           - build: pinned-win
             os: windows-2019
-            rust: 1.74.0
+            rust: 1.81.0
           - build: stable
             os: ubuntu-22.04
             rust: stable
